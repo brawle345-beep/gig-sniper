@@ -56,7 +56,8 @@ def get_main_menu():
     kb = [
         [InlineKeyboardButton(text="🔥 Свежие вакансии", callback_data="show_jobs")],
         [InlineKeyboardButton(text="💎 Купить Премиум", callback_data="buy_premium")],
-        [InlineKeyboardButton(text="🎁 Пригласить друга", callback_data="invite")]
+        [InlineKeyboardButton(text="🎁 Пригласить друга", callback_data="invite")],
+        [InlineKeyboardButton(text="📊 Мой статус", callback_data="my_status")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
