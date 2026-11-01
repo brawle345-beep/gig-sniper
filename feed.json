@@ -1,26 +1,26 @@
 [
  {
-  "title": "Welocalize: Automation Specialist",
-  "company": "",
-  "source": "weworkremotely",
-  "url": "https://weworkremotely.com/remote-jobs/welocalize-automation-specialist",
-  "salary_min": null,
-  "salary_max": null
- },
- {
-  "title": "High-Accuracy Quotex Trading Bot",
+  "title": "Dual WordPress-Analytics Resume",
   "company": "",
   "source": "freelancer",
-  "url": "https://www.freelancer.com/projects/api/High-Accuracy-Quotex-Trading-Bot",
-  "salary_min": 1500,
-  "salary_max": 12500
+  "url": "https://www.freelancer.com/projects/resumes/Dual-WordPress-Analytics-Resume",
+  "salary_min": 2,
+  "salary_max": 8
  },
  {
-  "title": "Lottery Data Analysis",
+  "title": "Indoor 3D Mapping with Stereo SLAM -- 2",
   "company": "",
   "source": "freelancer",
-  "url": "https://www.freelancer.com/projects/data-analysis/Lottery-Data-Analysis",
-  "salary_min": 250,
-  "salary_max": 750
+  "url": "https://www.freelancer.com/projects/computer-vision/Indoor-Mapping-with-Stereo-SLAM",
+  "salary_min": 750,
+  "salary_max": 1250
+ },
+ {
+  "title": "Self-Hosted WhatsApp API Integration ",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/api-developmet/Self-Hosted-WhatsApp-API-Integration",
+  "salary_min": 600,
+  "salary_max": 1500
  }
 ]
