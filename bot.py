@@ -8,7 +8,7 @@ from threading import Thread
 from flask import Flask
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice, PreCheckoutQuery
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
@@ -181,6 +181,22 @@ async def my_status(callback: CallbackQuery):
             
     await callback.message.answer(text, reply_markup=get_main_menu())
     await callback.answer()
+
+@dp.message(Command("stats"))
+async def cmd_stats(message: Message):
+    if str(message.from_user.id) != ADMIN_ID:
+        return
+        
+    db = load_db()
+    total_users = len(db)
+    premium_users = sum(1 for uid, until in db.items() if until > time.time())
+    
+    text = (
+        f"📊 <b>Статистика бота:</b>\n\n"
+        f"👥 Всего пользователей: <b>{total_users}</b>\n"
+        f"💎 С активным Премиумом: <b>{premium_users}</b>"
+    )
+    await message.answer(text)
 
 async def main():
     print("Бот запущен...")
