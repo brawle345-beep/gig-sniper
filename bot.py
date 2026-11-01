@@ -80,7 +80,8 @@ def get_main_menu():
         [InlineKeyboardButton(text="🔥 Свежие вакансии", callback_data="show_jobs")],
         [InlineKeyboardButton(text="💎 Купить Премиум", callback_data="buy_premium")],
         [InlineKeyboardButton(text="🎁 Пригласить друга", callback_data="invite")],
-        [InlineKeyboardButton(text="📊 Мой статус", callback_data="my_status")]
+        [InlineKeyboardButton(text="📊 Мой статус", callback_data="my_status")],
+        [InlineKeyboardButton(text="📢 Перейти в канал", url="https://t.me/gigsnipervakansii")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
@@ -89,11 +90,10 @@ async def start(message: Message):
     db = load_db()
     uid = str(message.from_user.id)
     
-    # --- ЛОГИКА УВЕДОМЛЕНИЙ ---
+    # Уведомление тебе о новом пользователе
     is_new_user = uid not in db
     if is_new_user:
         db[uid] = 0
-        # Если зашел НЕ админ, отправляем тебе уведомление
         if uid != ADMIN_ID:
             try:
                 user_name = message.from_user.first_name
@@ -102,7 +102,6 @@ async def start(message: Message):
                 await bot.send_message(ADMIN_ID, f"👤 <b>Новый пользователь!</b>\nИмя: {user_name}\nID: <code>{uid}</code>")
             except Exception as e:
                 print(f"Ошибка при отправке уведомления: {e}", file=sys.stderr)
-    # ---------------------------
         
     args = message.text.split()
     if len(args) > 1 and args[1].startswith("ref_"):
@@ -124,10 +123,15 @@ async def start(message: Message):
     else:
         save_db(db)
 
+    # НОВЫЙ ТЕКСТ ПРИВЕТСТВИЯ
     text = (
-        "👋 <b>Привет! Я твой карманный снайпер.</b>\n\n"
-        "Я сканирую биржи труда и присылаю только свежие заказы.\n"
-        "Жми на кнопки ниже, чтобы начать."
+        "<b>Снайпер на позиции. 🎯</b>\n\n"
+        "Радар сканирует мировые биржи каждые 10 минут. Свежие цели (вакансии) уже в прицеле, мусор отсеян.\n\n"
+        "<b>Твои действия:</b>\n"
+        "1️⃣ <b>«🔥 Свежие вакансии»</b> — забрать 3 бесплатных заказа.\n"
+        "2️⃣ <b>«💎 Купить Премиум»</b> — снять лимит и видеть все 30+ целей.\n"
+        "3️⃣ <b>«🎁 Пригласить друга»</b> — получить +7 дней к прицелу бесплатно.\n\n"
+        "Выбирай кнопку ниже. Работаем."
     )
     await message.answer(text, reply_markup=get_main_menu())
 
