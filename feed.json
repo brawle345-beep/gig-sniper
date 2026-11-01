@@ -1,27 +1,59 @@
 [
  {
-  "title": "Dropbox: Backend Product Software Engineer",
+  "title": "CPG Beyond: Mechanical Commissioning Agent II",
   "company": "",
   "source": "weworkremotely",
-  "url": "https://weworkremotely.com/remote-jobs/dropbox-backend-product-software-engineer",
+  "url": "https://weworkremotely.com/remote-jobs/cpg-beyond-mechanical-commissioning-agent-ii",
   "salary_min": null,
   "salary_max": null
  },
  {
-  "title": "Ritual: Developer Experience Engineer",
+  "title": "Chemtrade: Sales Account Manager",
   "company": "",
   "source": "weworkremotely",
-  "url": "https://weworkremotely.com/remote-jobs/ritual-developer-experience-engineer",
+  "url": "https://weworkremotely.com/remote-jobs/chemtrade-sales-account-manager",
   "salary_min": null,
   "salary_max": null
  },
  {
-  "title": "Welocalize: Automation Specialist",
+  "title": "CONNEXUS RESOURCE GROUP INC: Customer Service Representative - Work From Home",
   "company": "",
   "source": "weworkremotely",
-  "url": "https://weworkremotely.com/remote-jobs/welocalize-automation-specialist",
+  "url": "https://weworkremotely.com/remote-jobs/connexus-resource-group-inc-customer-service-representative-work-from-home",
   "salary_min": null,
   "salary_max": null
+ },
+ {
+  "title": "High-Accuracy Quotex Trading Bot",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/api/High-Accuracy-Quotex-Trading-Bot",
+  "salary_min": 1500,
+  "salary_max": 12500
+ },
+ {
+  "title": "React native stripe implementation - Quotation Request",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/python/React-native-stripe-implementation-40797571",
+  "salary_min": 250,
+  "salary_max": 750
+ },
+ {
+  "title": "Build Collaborative Grok AI Organization",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/ai-agents/Build-Collaborative-Grok-Organization",
+  "salary_min": 50,
+  "salary_max": null
+ },
+ {
+  "title": "phone voice agent coded in Python deployed to AWS AgentCore",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/voice-agents/phone-voice-agent-coded-Python",
+  "salary_min": 10,
+  "salary_max": 30
  },
  {
   "title": "AI Solution Development Support",
@@ -70,14 +102,6 @@
   "url": "https://www.freelancer.com/projects/python/Build-Powered-PDF-Processing-Question",
   "salary_min": 250,
   "salary_max": 750
- },
- {
-  "title": "High-Accuracy Quotex Trading Bot",
-  "company": "",
-  "source": "freelancer",
-  "url": "https://www.freelancer.com/projects/api/High-Accuracy-Quotex-Trading-Bot",
-  "salary_min": 1500,
-  "salary_max": 12500
  },
  {
   "title": "Lottery Data Analysis",
@@ -214,29 +238,5 @@
   "url": "https://www.freelancer.com/projects/backend-development/Real-Time-Chat-API-Backend",
   "salary_min": 250,
   "salary_max": 750
- },
- {
-  "title": "AI-Powered Stock Market Analytics & Prediction Application",
-  "company": "",
-  "source": "freelancer",
-  "url": "https://www.freelancer.com/projects/php/Powered-Stock-Market-Analytics",
-  "salary_min": 6000,
-  "salary_max": 6001
- },
- {
-  "title": "AI 3D Defect Detection Model",
-  "company": "",
-  "source": "freelancer",
-  "url": "https://www.freelancer.com/projects/3d-reconstruction-mapping/Defect-Detection-Model",
-  "salary_min": 500000,
-  "salary_max": 1000000
- },
- {
-  "title": "Abaqus Pile Results Extraction",
-  "company": "",
-  "source": "freelancer",
-  "url": "https://www.freelancer.com/projects/abaqus/Abaqus-Pile-Results-Extraction",
-  "salary_min": 1500,
-  "salary_max": 12500
  }
 ]
