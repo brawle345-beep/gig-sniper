@@ -1,29 +1,5 @@
 [
  {
-  "title": "Cloud Engineer Automation",
-  "company": "Smile Digital Health",
-  "source": "remoteok",
-  "url": "https://remoteOK.com/remote-jobs/remote-cloud-engineer-automation-smile-digital-health-1137600",
-  "salary_min": 0,
-  "salary_max": 0
- },
- {
-  "title": "ZoomInfo Technologies LLC: Principal Product Manager - Identity",
-  "company": "",
-  "source": "weworkremotely",
-  "url": "https://weworkremotely.com/remote-jobs/zoominfo-technologies-llc-principal-product-manager-identity",
-  "salary_min": null,
-  "salary_max": null
- },
- {
-  "title": "Discord: Senior Stock Administrator",
-  "company": "",
-  "source": "weworkremotely",
-  "url": "https://weworkremotely.com/remote-jobs/discord-senior-stock-administrator",
-  "salary_min": null,
-  "salary_max": null
- },
- {
   "title": "Gong.io: Commercial Account Executive",
   "company": "",
   "source": "weworkremotely",
@@ -72,6 +48,30 @@
   "salary_max": null
  },
  {
+  "title": "Cricket Color Trading MVP",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/web-development/Cricket-Color-Trading-MVP",
+  "salary_min": 12500,
+  "salary_max": 37500
+ },
+ {
+  "title": "Dual WordPress-Analytics Resume",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/resumes/Dual-WordPress-Analytics-Resume",
+  "salary_min": 2,
+  "salary_max": 8
+ },
+ {
+  "title": "Build an AI-Powered PDF Processing & Question Bank Management System",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/python/Build-Powered-PDF-Processing-Question",
+  "salary_min": 250,
+  "salary_max": 750
+ },
+ {
   "title": "High-Accuracy Quotex Trading Bot",
   "company": "",
   "source": "freelancer",
@@ -86,14 +86,6 @@
   "url": "https://www.freelancer.com/projects/data-analysis/Lottery-Data-Analysis",
   "salary_min": 250,
   "salary_max": 750
- },
- {
-  "title": "Dual WordPress-Analytics Resume",
-  "company": "",
-  "source": "freelancer",
-  "url": "https://www.freelancer.com/projects/resumes/Dual-WordPress-Analytics-Resume",
-  "salary_min": 2,
-  "salary_max": 8
  },
  {
   "title": "Indoor 3D Mapping with Stereo SLAM -- 2",
@@ -238,5 +230,13 @@
   "url": "https://www.freelancer.com/projects/abaqus/Abaqus-Pile-Results-Extraction",
   "salary_min": 1500,
   "salary_max": 12500
+ },
+ {
+  "title": "Decrypt My WhatsApp Chat Backup",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/data-recovery/Decrypt-WhatsApp-Chat-Backup",
+  "salary_min": 600,
+  "salary_max": 1500
  }
 ]
