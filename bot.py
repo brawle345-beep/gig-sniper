@@ -16,6 +16,9 @@ TOKEN = os.environ.get("BOT_TOKEN")
 FEED_URL = "https://raw.githubusercontent.com/brawle345-beep/gig-sniper/main/feed.json"
 DB_FILE = "users.json"
 
+# Твой ID вшит сюда
+ADMIN_ID = "7183342708"
+
 def load_db():
     if os.path.exists(DB_FILE):
         with open(DB_FILE, "r") as f:
@@ -27,10 +30,8 @@ def save_db(db):
         json.dump(db, f)
 
 def has_premium(user_id):
-    # ТВОЙ ID (узнай у @userinfobot и вставь сюда). Тебе Премиум будет выдаваться всегда.
-    if str(user_id) == "7183342708":
+    if str(user_id) == ADMIN_ID:
         return True
-
     db = load_db()
     uid = str(user_id)
     if uid in db:
@@ -66,31 +67,22 @@ async def start(message: Message):
     db = load_db()
     uid = str(message.from_user.id)
     
-    # Добавляем друга в базу, если его там нет (доступ 0 дней)
     if uid not in db:
         db[uid] = 0
         
-    # Проверяем, есть ли реферальный код в ссылке
     args = message.text.split()
     if len(args) > 1 and args[1].startswith("ref_"):
         ref_id = args[1].replace("ref_", "")
-        
-        # Если перешел не сам на себя
         if ref_id.isdigit() and ref_id != uid:
-            # 1. Начисляем 7 дней тому, кто пригласил
             if ref_id in db:
                 db[ref_id] += (7 * 86400)
             else:
                 db[ref_id] = time.time() + (7 * 86400)
-            
             save_db(db)
             
-            # 2. Формируем имя друга для уведомления
             friend_name = message.from_user.first_name
             if message.from_user.username:
                 friend_name += f" (@{message.from_user.username})"
-            
-            # 3. Отправляем уведомление тебе (пригласившему)
             try:
                 await bot.send_message(ref_id, f"🎁 По твоей ссылке перешел {friend_name}! Тебе начислено +7 дней Премиума.")
             except Exception:
@@ -105,22 +97,9 @@ async def start(message: Message):
     )
     await message.answer(text, reply_markup=get_main_menu())
 
-@dp.callback_query(F.data == "my_status")
-async def my_status(callback: CallbackQuery):
-    if str(callback.from_user.id) == "7183342708":
-        text = "📊 <b>Твой статус:</b> Админ (Премиум навсегда)"
-    else:
-        db = load_db()
-        uid = str(callback.from_user.id)
-        until = db.get(uid, 0)
-        
-        if until > time.time():
-            days_left = int((until - time.time()) / 86400)
-            text = f"📊 <b>Твой статус:</b> Премиум\nОсталось дней: {days_left}"
-        else:
-            text = "📊 <b>Твой статус:</b> Бесплатный\nКупи Премиум, чтобы видеть все вакансии."
-            
-    await callback.message.answer(text, reply_markup=get_main_menu())
+@dp.callback_query(F.data == "show_jobs")
+async def show_jobs(callback: CallbackQuery):
+    loading_msg = await callback.message.answer("🔄 Загружаю свежие вакансии...")
     await callback.answer()
     
     try:
@@ -185,9 +164,26 @@ async def invite(callback: CallbackQuery):
     await callback.message.answer(text, reply_markup=get_main_menu(), disable_web_page_preview=True)
     await callback.answer()
 
+@dp.callback_query(F.data == "my_status")
+async def my_status(callback: CallbackQuery):
+    if str(callback.from_user.id) == ADMIN_ID:
+        text = "📊 <b>Твой статус:</b> Админ (Премиум навсегда)"
+    else:
+        db = load_db()
+        uid = str(callback.from_user.id)
+        until = db.get(uid, 0)
+        
+        if until > time.time():
+            days_left = int((until - time.time()) / 86400)
+            text = f"📊 <b>Твой статус:</b> Премиум\nОсталось дней: {days_left}"
+        else:
+            text = "📊 <b>Твой статус:</b> Бесплатный\nКупи Премиум, чтобы видеть все вакансии."
+            
+    await callback.message.answer(text, reply_markup=get_main_menu())
+    await callback.answer()
+
 async def main():
     print("Бот запущен...")
-    # Удаляем вебхук на всякий случай, чтобы избежать конфликта
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
