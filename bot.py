@@ -12,16 +12,14 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from aiogram.filters import CommandStart, Command
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
 
 TOKEN = os.environ.get("BOT_TOKEN")
 FEED_URL = "https://raw.githubusercontent.com/brawle345-beep/gig-sniper/main/feed.json"
 DB_FILE = "users.json"
 
-# Твой ID вшит сюда
 ADMIN_ID = "7183342708"
-
-# 🚨 ВЫКЛЮЧАТЕЛЬ ТЕХ. ОБСЛУЖИВАНИЯ 🚨
-MAINTENANCE_MODE = True
+MAINTENANCE_MODE = False
 
 def load_db():
     if os.path.exists(DB_FILE):
@@ -57,19 +55,16 @@ def run_flask():
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
-# --- ПРОВЕРКА ТЕХ. ОБСЛУЖИВАНИЯ ---
 class MaintenanceMiddleware(BaseMiddleware):
     async def __call__(self, handler, event: TelegramObject, data: dict):
         if MAINTENANCE_MODE:
             if event.from_user and str(event.from_user.id) == ADMIN_ID:
                 return await handler(event, data)
-            
             if isinstance(event, Message):
-                await event.answer("🛠 <b>Бот на техническом обслуживании.</b>\n\nМы обновляем базу вакансий. Пожалуйста, зайдите чуть позже!")
+                await event.answer("🛠 <b>Бот на техническом обслуживании.</b>\n\nМы обновляем базу вакансий. Зайдите чуть позже!")
             elif isinstance(event, CallbackQuery):
-                await event.answer("🛠 Бот на тех. обслуживании. Зайдите чуть позже!", show_alert=True)
+                await event.answer("🛠 Бот на тех. обслуживании.", show_alert=True)
             return 
-        
         return await handler(event, data)
 
 dp.message.middleware(MaintenanceMiddleware())
@@ -85,12 +80,18 @@ def get_main_menu():
     ]
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
+# Вспомогательная функция для безопасного редактирования (чтобы не было ошибок, если текст не изменился)
+async def safe_edit(message: Message, text: str, reply_markup=None):
+    try:
+        await message.edit_text(text, reply_markup=reply_markup, disable_web_page_preview=True)
+    except TelegramBadRequest:
+        pass # Если сообщение не изменилось или устарело, просто игнорируем
+
 @dp.message(CommandStart())
 async def start(message: Message):
     db = load_db()
     uid = str(message.from_user.id)
     
-    # Уведомление тебе о новом пользователе
     is_new_user = uid not in db
     if is_new_user:
         db[uid] = 0
@@ -100,8 +101,8 @@ async def start(message: Message):
                 if message.from_user.username:
                     user_name += f" (@{message.from_user.username})"
                 await bot.send_message(ADMIN_ID, f"👤 <b>Новый пользователь!</b>\nИмя: {user_name}\nID: <code>{uid}</code>")
-            except Exception as e:
-                print(f"Ошибка при отправке уведомления: {e}", file=sys.stderr)
+            except Exception:
+                pass
         
     args = message.text.split()
     if len(args) > 1 and args[1].startswith("ref_"):
@@ -123,7 +124,6 @@ async def start(message: Message):
     else:
         save_db(db)
 
-    # НОВЫЙ ТЕКСТ ПРИВЕТСТВИЯ
     text = (
         "<b>Снайпер на позиции. 🎯</b>\n\n"
         "Радар сканирует мировые биржи каждые 10 минут. Свежие цели (вакансии) уже в прицеле, мусор отсеян.\n\n"
@@ -137,8 +137,8 @@ async def start(message: Message):
 
 @dp.callback_query(F.data == "show_jobs")
 async def show_jobs(callback: CallbackQuery):
-    loading_msg = await callback.message.answer("🔄 Загружаю свежие вакансии...")
-    await callback.answer()
+    # Меняем текст на "Загрузку", не создавая новое сообщение
+    await safe_edit(callback.message, "🔄 Загружаю свежие вакансии...")
     
     try:
         r = requests.get(FEED_URL, timeout=10)
@@ -147,10 +147,8 @@ async def show_jobs(callback: CallbackQuery):
         jobs = []
 
     if not jobs:
-        await loading_msg.edit_text(
-            "Пока новых вакансий нет. Я проверяю доски каждые 10 минут. Загляни позже!", 
-            reply_markup=get_main_menu()
-        )
+        await safe_edit(callback.message, "Пока новых вакансий нет. Я проверяю доски каждые 10 минут. Загляни позже!", reply_markup=get_main_menu())
+        await callback.answer()
         return
 
     is_premium = has_premium(callback.from_user.id)
@@ -167,7 +165,9 @@ async def show_jobs(callback: CallbackQuery):
         text += f"🔒 <i>Показано {limit} из {len(jobs)} вакансий.</i>\n"
         text += "💎 Купи Премиум, чтобы видеть их все."
     
-    await loading_msg.edit_text(text, reply_markup=get_main_menu(), disable_web_page_preview=True)
+    # Меняем "Загрузку" на сами вакансии
+    await safe_edit(callback.message, text, reply_markup=get_main_menu())
+    await callback.answer()
 
 @dp.callback_query(F.data == "buy_premium")
 async def buy_premium(callback: CallbackQuery):
@@ -199,7 +199,9 @@ async def invite(callback: CallbackQuery):
     me = await bot.get_me()
     link = f"https://t.me/{me.username}?start=ref_{callback.from_user.id}"
     text = f"🎁 <b>Реферальная программа</b>\n\nТвоя ссылка:\n<code>{link}</code>\n\nЗа друга — +7 дней Премиума!"
-    await callback.message.answer(text, reply_markup=get_main_menu(), disable_web_page_preview=True)
+    
+    # Меняем текущее сообщение на рефералку
+    await safe_edit(callback.message, text, reply_markup=get_main_menu())
     await callback.answer()
 
 @dp.callback_query(F.data == "my_status")
@@ -217,23 +219,18 @@ async def my_status(callback: CallbackQuery):
         else:
             text = "📊 <b>Твой статус:</b> Бесплатный\nКупи Премиум, чтобы видеть все вакансии."
             
-    await callback.message.answer(text, reply_markup=get_main_menu())
+    # Меняем текущее сообщение на статус
+    await safe_edit(callback.message, text, reply_markup=get_main_menu())
     await callback.answer()
 
 @dp.message(Command("stats"))
 async def cmd_stats(message: Message):
     if str(message.from_user.id) != ADMIN_ID:
         return
-        
     db = load_db()
     total_users = len(db)
     premium_users = sum(1 for uid, until in db.items() if until > time.time())
-    
-    text = (
-        f"📊 <b>Статистика бота:</b>\n\n"
-        f"👥 Всего пользователей: <b>{total_users}</b>\n"
-        f"💎 С активным Премиумом: <b>{premium_users}</b>"
-    )
+    text = f"📊 <b>Статистика бота:</b>\n\n👥 Всего пользователей: <b>{total_users}</b>\n💎 С активным Премиумом: <b>{premium_users}</b>"
     await message.answer(text)
 
 async def main():
