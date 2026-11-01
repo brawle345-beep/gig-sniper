@@ -3,6 +3,7 @@ import os
 import asyncio
 import json
 import time
+import sys
 import requests
 from threading import Thread
 from flask import Flask
@@ -16,8 +17,10 @@ TOKEN = os.environ.get("BOT_TOKEN")
 FEED_URL = "https://raw.githubusercontent.com/brawle345-beep/gig-sniper/main/feed.json"
 DB_FILE = "users.json"
 
+# Твой ID вшит сюда
 ADMIN_ID = "7183342708"
 
+# 🚨 ВЫКЛЮЧАТЕЛЬ ТЕХ. ОБСЛУЖИВАНИЯ 🚨
 MAINTENANCE_MODE = False
 
 def load_db():
@@ -54,6 +57,7 @@ def run_flask():
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
+# --- ПРОВЕРКА ТЕХ. ОБСЛУЖИВАНИЯ ---
 class MaintenanceMiddleware(BaseMiddleware):
     async def __call__(self, handler, event: TelegramObject, data: dict):
         if MAINTENANCE_MODE:
@@ -82,14 +86,23 @@ def get_main_menu():
 
 @dp.message(CommandStart())
 async def start(message: Message):
-    # ВЫВОД В ЛОГИ RENDER
-    print(f"🔥 НОВЫЙ ПОЛЬЗОВАТЕЛЬ НАЖАЛ /start: {message.from_user.first_name} | @{message.from_user.username} | ID: {message.from_user.id}")
-
     db = load_db()
     uid = str(message.from_user.id)
     
-    if uid not in db:
+    # --- ЛОГИКА УВЕДОМЛЕНИЙ ---
+    is_new_user = uid not in db
+    if is_new_user:
         db[uid] = 0
+        # Если зашел НЕ админ, отправляем тебе уведомление
+        if uid != ADMIN_ID:
+            try:
+                user_name = message.from_user.first_name
+                if message.from_user.username:
+                    user_name += f" (@{message.from_user.username})"
+                await bot.send_message(ADMIN_ID, f"👤 <b>Новый пользователь!</b>\nИмя: {user_name}\nID: <code>{uid}</code>")
+            except Exception as e:
+                print(f"Ошибка при отправке уведомления: {e}", file=sys.stderr)
+    # ---------------------------
         
     args = message.text.split()
     if len(args) > 1 and args[1].startswith("ref_"):
@@ -120,7 +133,6 @@ async def start(message: Message):
 
 @dp.callback_query(F.data == "show_jobs")
 async def show_jobs(callback: CallbackQuery):
-    print(f"👀 ПОЛЬЗОВАТЕЛЬ СМОТРИТ ВАКАНСИИ: {callback.from_user.first_name} | ID: {callback.from_user.id}")
     loading_msg = await callback.message.answer("🔄 Загружаю свежие вакансии...")
     await callback.answer()
     
@@ -172,7 +184,6 @@ async def pre_checkout(q: PreCheckoutQuery):
 
 @dp.message(F.successful_payment)
 async def on_paid(message: Message):
-    print(f"💰 ОПЛАТА ПРЕМИУМА: {message.from_user.first_name} | ID: {message.from_user.id}")
     db = load_db()
     uid = str(message.from_user.id)
     db[uid] = time.time() + (30 * 86400)
