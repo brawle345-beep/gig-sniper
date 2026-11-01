@@ -16,7 +16,6 @@ TOKEN = os.environ.get("BOT_TOKEN")
 FEED_URL = "https://raw.githubusercontent.com/brawle345-beep/gig-sniper/main/feed.json"
 DB_FILE = "users.json"
 
-# --- База данных ---
 def load_db():
     if os.path.exists(DB_FILE):
         with open(DB_FILE, "r") as f:
@@ -34,15 +33,16 @@ def has_premium(user_id):
         if db[uid] > time.time():
             return True
         else:
-            del db[uid] # просрочка
+            del db[uid]
             save_db(db)
     return False
 
-# --- Flask (чтобы Render не засыпал) ---
+# --- Flask для Render ---
 app = Flask(__name__)
 @app.route('/')
 def home(): return "Bot is running!"
-def run_flask(): app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+def run_flask(): 
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
 
 # --- Aiogram ---
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
@@ -67,7 +67,9 @@ async def start(message: Message):
 
 @dp.callback_query(F.data == "show_jobs")
 async def show_jobs(callback: CallbackQuery):
-    await callback.message.edit_text("🔄 Загружаю свежие вакансии...")
+    # Отправляем новое сообщение вместо редактирования старого
+    loading_msg = await callback.message.answer("🔄 Загружаю свежие вакансии...")
+    await callback.answer()
     
     try:
         r = requests.get(FEED_URL, timeout=10)
@@ -76,15 +78,13 @@ async def show_jobs(callback: CallbackQuery):
         jobs = []
 
     if not jobs:
-        await callback.message.edit_text(
+        await loading_msg.edit_text(
             "Пока новых вакансий нет. Я проверяю доски каждые 10 минут. Загляни позже!", 
             reply_markup=get_main_menu()
         )
         return
 
     is_premium = has_premium(callback.from_user.id)
-    
-    # Если премиум — показываем 10, если нет — только 3
     limit = 10 if is_premium else 3
     text = "🔥 <b>Свежие вакансии:</b>\n\n"
     
@@ -98,8 +98,7 @@ async def show_jobs(callback: CallbackQuery):
         text += f"🔒 <i>Показано {limit} из {len(jobs)} вакансий.</i>\n"
         text += "💎 Купи Премиум, чтобы видеть их все."
     
-    await callback.message.edit_text(text, reply_markup=get_main_menu(), disable_web_page_preview=True)
-    await callback.answer()
+    await loading_msg.edit_text(text, reply_markup=get_main_menu(), disable_web_page_preview=True)
 
 @dp.callback_query(F.data == "buy_premium")
 async def buy_premium(callback: CallbackQuery):
@@ -122,10 +121,8 @@ async def pre_checkout(q: PreCheckoutQuery):
 async def on_paid(message: Message):
     db = load_db()
     uid = str(message.from_user.id)
-    # Добавляем 30 дней к текущему времени
     db[uid] = time.time() + (30 * 86400)
     save_db(db)
-    
     await message.answer("✅ <b>Оплата прошла!</b> Доступ открыт на 30 дней. Жми «Свежие вакансии»!", reply_markup=get_main_menu())
 
 @dp.callback_query(F.data == "invite")
@@ -133,11 +130,13 @@ async def invite(callback: CallbackQuery):
     me = await bot.get_me()
     link = f"https://t.me/{me.username}?start=ref_{callback.from_user.id}"
     text = f"🎁 <b>Реферальная программа</b>\n\nТвоя ссылка:\n<code>{link}</code>\n\nЗа друга — +7 дней Премиума!"
-    await callback.message.edit_text(text, reply_markup=get_main_menu(), disable_web_page_preview=True)
+    await callback.message.answer(text, reply_markup=get_main_menu(), disable_web_page_preview=True)
     await callback.answer()
 
 async def main():
     print("Бот запущен...")
+    # Удаляем вебхук на всякий случай, чтобы избежать конфликта
+    await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
