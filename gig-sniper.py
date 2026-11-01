@@ -22,13 +22,12 @@ TG_TOKEN = os.environ.get("TG_TOKEN", "")
 TG_CHAT = os.environ.get("TG_CHAT", "")
 KEYWORDS = [k.strip().lower() for k in os.environ.get("KEYWORDS", "python").split(",") if k.strip()]
 NEGATIVE = [k.strip().lower() for k in os.environ.get("NEGATIVE", "unpaid,equity only,commission only,intern").split(",") if k.strip()]
-MIN_SCORE = int(os.environ.get("MIN_SCORE", "2"))  # Снизил порог до 2, чтобы ловило больше
+MIN_SCORE = int(os.environ.get("MIN_SCORE", "2"))
 MAX_AGE_HOURS = int(os.environ.get("MAX_AGE_HOURS", "24"))
 MAX_SEND_PER_RUN = 3  # максимум 3 сообщения за запуск
-RU_ONLY = False  # ВКЛЮЧАЕМ АНГЛИЙСКИЕ ВАКАНСИИ
+RU_ONLY = False  # английские и русские
 DRY_RUN = os.environ.get("DRY_RUN", "0") == "1"
 STATE = Path("seen.json")
-# Притворяемся обычным браузером, чтобы hh.ru не банил так сильно
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 @dataclass
@@ -84,10 +83,8 @@ def truncate(s: str, n: int) -> str:
     return s if len(s) <= n else s[: n - 1].rstrip() + "…"
 
 def _int(x) -> int | None:
-    try:
-        return int(float(x))
-    except (TypeError, ValueError):
-        return None
+    try: return int(float(x))
+    except (TypeError, ValueError): return None
 
 def _parse_iso(s) -> datetime | None:
     if not s: return None
@@ -103,15 +100,17 @@ def _parse_unix(x) -> datetime | None:
 # --- адаптеры ---
 def fetch_hh(query: str) -> Iterable[Lead]:
     try:
-        r = requests.get("https://api.hh.ru/vacancies", params={"text": query, "per_page": 20, "order_by": "publication_time"}, headers={"User-Agent": UA}, timeout=30)
+        # Если hh.ru забанен, просто молча выходим, не засоряя лог
+        r = requests.get("https://api.hh.ru/vacancies", params={"text": query, "per_page": 20, "order_by": "publication_time"}, headers={"User-Agent": UA}, timeout=10)
+        if r.status_code == 403: return
         r.raise_for_status()
         for item in r.json().get("items", []):
             salary = item.get("salary") or {}
             snippet = item.get("snippet") or {}
             desc = f"{snippet.get('requirement', '')} {snippet.get('responsibility', '')}"
             yield Lead("hh.ru", item.get("name", ""), item.get("alternate_url", ""), (item.get("employer") or {}).get("name", ""), desc, _parse_iso(item.get("published_at")), _int(salary.get("from")), _int(salary.get("to")))
-    except Exception as e:
-        print(f"hh.ru failed (maybe blocked): {e}", file=sys.stderr)
+    except Exception:
+        pass
 
 def fetch_remoteok() -> Iterable[Lead]:
     r = requests.get("https://remoteok.com/api", headers={"User-Agent": UA}, timeout=30)
@@ -187,17 +186,15 @@ def main() -> int:
         if shipped >= MAX_SEND_PER_RUN: return
         
         key = lead_key(lead)
-        text_to_check = f"{lead.title} {lead.description}"
-        
-        # Если включен RU_ONLY, а текста на русском нет — скипаем
-        if RU_ONLY and not has_cyrillic(text_to_check):
-            seen.setdefault(key, int(time.time()))
-            return 
-            
+        # Если уже отправляли или не подходит по возрасту/скору — просто выходим, НЕ записывая в память
         if key in seen or not lead.fresh() or lead.score() < MIN_SCORE:
-            seen.setdefault(key, int(time.time()))
             return
             
+        text_to_check = f"{lead.title} {lead.description}"
+        if RU_ONLY and not has_cyrillic(text_to_check):
+            return
+            
+        # Записываем в память ТОЛЬКО если отправка прошла успешно
         if send(lead.to_message()):
             seen[key] = int(time.time())
             shipped += 1
