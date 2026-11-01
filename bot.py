@@ -6,8 +6,8 @@ import time
 import requests
 from threading import Thread
 from flask import Flask
-from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice, PreCheckoutQuery
+from aiogram import Bot, Dispatcher, F, BaseMiddleware
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice, PreCheckoutQuery, TelegramObject
 from aiogram.filters import CommandStart, Command
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -16,8 +16,9 @@ TOKEN = os.environ.get("BOT_TOKEN")
 FEED_URL = "https://raw.githubusercontent.com/brawle345-beep/gig-sniper/main/feed.json"
 DB_FILE = "users.json"
 
-# Твой ID вшит сюда
 ADMIN_ID = "7183342708"
+
+MAINTENANCE_MODE = False
 
 def load_db():
     if os.path.exists(DB_FILE):
@@ -53,6 +54,23 @@ def run_flask():
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
+class MaintenanceMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event: TelegramObject, data: dict):
+        if MAINTENANCE_MODE:
+            if event.from_user and str(event.from_user.id) == ADMIN_ID:
+                return await handler(event, data)
+            
+            if isinstance(event, Message):
+                await event.answer("🛠 <b>Бот на техническом обслуживании.</b>\n\nМы обновляем базу вакансий. Пожалуйста, зайдите чуть позже!")
+            elif isinstance(event, CallbackQuery):
+                await event.answer("🛠 Бот на тех. обслуживании. Зайдите чуть позже!", show_alert=True)
+            return 
+        
+        return await handler(event, data)
+
+dp.message.middleware(MaintenanceMiddleware())
+dp.callback_query.middleware(MaintenanceMiddleware())
+
 def get_main_menu():
     kb = [
         [InlineKeyboardButton(text="🔥 Свежие вакансии", callback_data="show_jobs")],
@@ -64,6 +82,9 @@ def get_main_menu():
 
 @dp.message(CommandStart())
 async def start(message: Message):
+    # ВЫВОД В ЛОГИ RENDER
+    print(f"🔥 НОВЫЙ ПОЛЬЗОВАТЕЛЬ НАЖАЛ /start: {message.from_user.first_name} | @{message.from_user.username} | ID: {message.from_user.id}")
+
     db = load_db()
     uid = str(message.from_user.id)
     
@@ -99,6 +120,7 @@ async def start(message: Message):
 
 @dp.callback_query(F.data == "show_jobs")
 async def show_jobs(callback: CallbackQuery):
+    print(f"👀 ПОЛЬЗОВАТЕЛЬ СМОТРИТ ВАКАНСИИ: {callback.from_user.first_name} | ID: {callback.from_user.id}")
     loading_msg = await callback.message.answer("🔄 Загружаю свежие вакансии...")
     await callback.answer()
     
@@ -150,6 +172,7 @@ async def pre_checkout(q: PreCheckoutQuery):
 
 @dp.message(F.successful_payment)
 async def on_paid(message: Message):
+    print(f"💰 ОПЛАТА ПРЕМИУМА: {message.from_user.first_name} | ID: {message.from_user.id}")
     db = load_db()
     uid = str(message.from_user.id)
     db[uid] = time.time() + (30 * 86400)
