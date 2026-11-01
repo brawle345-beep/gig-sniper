@@ -205,13 +205,14 @@ def main() -> int:
 
     seen = load_state()
     shipped = 0
-    feed_items = [] # Сюда собираем для бота
+    feed_items = [] # Сюда собираем ВСЕ вакансии для бота
 
     def handle(lead: Lead) -> None:
         nonlocal shipped
-        if shipped >= MAX_SEND_PER_RUN: return
         
         key = lead_key(lead)
+        
+        # Если уже видели или старье — скипаем
         if key in seen or not lead.fresh() or lead.score() < MIN_SCORE:
             return
             
@@ -219,19 +220,23 @@ def main() -> int:
         if RU_ONLY and not has_cyrillic(text_to_check):
             return
             
-        feed_items.append({
-            "title": lead.title,
-            "company": lead.company,
-            "source": lead.source,
-            "url": lead.url,
-            "salary_min": lead.salary_min,
-            "salary_max": lead.salary_max
-        })
+        # 1. ВСЕГДА добавляем в базу для бота (максимум 30 штук, чтобы файл не разрастался)
+        if len(feed_items) < 30:
+            feed_items.append({
+                "title": lead.title,
+                "company": lead.company,
+                "source": lead.source,
+                "url": lead.url,
+                "salary_min": lead.salary_min,
+                "salary_max": lead.salary_max
+            })
         
-        if send(lead.to_message()):
-            seen[key] = int(time.time())
-            shipped += 1
-            time.sleep(0.5)
+        # 2. Отправляем в Телеграм, только если еще не выслали лимит (3 штуки)
+        if shipped < MAX_SEND_PER_RUN:
+            if send(lead.to_message()):
+                seen[key] = int(time.time())
+                shipped += 1
+                time.sleep(0.5)
 
     for kw in KEYWORDS[:5]:
         for lead in fetch_hh(kw): handle(lead)
@@ -255,7 +260,6 @@ def main() -> int:
         
     print(f"shipped={shipped} tracked={len(seen)}")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())
