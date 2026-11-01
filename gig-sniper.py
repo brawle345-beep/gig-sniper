@@ -205,6 +205,7 @@ def main() -> int:
 
     seen = load_state()
     shipped = 0
+    feed_items = [] # Сюда собираем для бота
 
     def handle(lead: Lead) -> None:
         nonlocal shipped
@@ -218,6 +219,15 @@ def main() -> int:
         if RU_ONLY and not has_cyrillic(text_to_check):
             return
             
+        feed_items.append({
+            "title": lead.title,
+            "company": lead.company,
+            "source": lead.source,
+            "url": lead.url,
+            "salary_min": lead.salary_min,
+            "salary_max": lead.salary_max
+        })
+        
         if send(lead.to_message()):
             seen[key] = int(time.time())
             shipped += 1
@@ -237,6 +247,12 @@ def main() -> int:
         except Exception as e: print(f"freelancer[{kw}] failed: {e}", file=sys.stderr)
 
     save_state(seen)
+    
+    # Сохраняем фид для бота
+    if feed_items:
+        Path("feed.json").write_text(json.dumps(feed_items, ensure_ascii=False, indent=1))
+        print(f"feed.json saved with {len(feed_items)} items")
+        
     print(f"shipped={shipped} tracked={len(seen)}")
     return 0
 
