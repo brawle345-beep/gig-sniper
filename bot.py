@@ -28,7 +28,7 @@ def save_db(db):
 
 def has_premium(user_id):
     # ТВОЙ ID (узнай у @userinfobot и вставь сюда). Тебе Премиум будет выдаваться всегда.
-    if str(user_id) == "ВСТАВЬ_СВОЙ_ID_СЮДА":
+    if str(user_id) == "7183342708":
         return True
 
     db = load_db()
@@ -104,10 +104,22 @@ async def start(message: Message):
     )
     await message.answer(text, reply_markup=get_main_menu())
 
-@dp.callback_query(F.data == "show_jobs")
-async def show_jobs(callback: CallbackQuery):
-    # Отправляем новое сообщение вместо редактирования старого
-    loading_msg = await callback.message.answer("🔄 Загружаю свежие вакансии...")
+@dp.callback_query(F.data == "my_status")
+async def my_status(callback: CallbackQuery):
+    if str(callback.from_user.id) == "7183342708":
+        text = "📊 <b>Твой статус:</b> Админ (Премиум навсегда)"
+    else:
+        db = load_db()
+        uid = str(callback.from_user.id)
+        until = db.get(uid, 0)
+        
+        if until > time.time():
+            days_left = int((until - time.time()) / 86400)
+            text = f"📊 <b>Твой статус:</b> Премиум\nОсталось дней: {days_left}"
+        else:
+            text = "📊 <b>Твой статус:</b> Бесплатный\nКупи Премиум, чтобы видеть все вакансии."
+            
+    await callback.message.answer(text, reply_markup=get_main_menu())
     await callback.answer()
     
     try:
