@@ -27,6 +27,10 @@ def save_db(db):
         json.dump(db, f)
 
 def has_premium(user_id):
+    # ТВОЙ ID (узнай у @userinfobot и вставь сюда). Тебе Премиум будет выдаваться всегда.
+    if str(user_id) == "ВСТАВЬ_СВОЙ_ID_СЮДА":
+        return True
+
     db = load_db()
     uid = str(user_id)
     if uid in db:
