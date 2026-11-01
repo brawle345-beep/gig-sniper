@@ -78,8 +78,7 @@ class Lead:
         f"{salary}\n"
         f"📝 <i>{body}</i>\n\n"
         f"👉 <a href='{self.url}'>Откликнуться на вакансию</a>"
-    )
-
+        )
 def esc(s: str) -> str:
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
