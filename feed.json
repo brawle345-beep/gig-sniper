@@ -1,27 +1,19 @@
 [
  {
-  "title": "CPG Beyond: Mechanical Commissioning Agent II",
+  "title": "Python 3D Volume-Packing Optimizer - Quotation Request",
   "company": "",
-  "source": "weworkremotely",
-  "url": "https://weworkremotely.com/remote-jobs/cpg-beyond-mechanical-commissioning-agent-ii",
-  "salary_min": null,
-  "salary_max": null
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/php/Python-Volume-Packing-Optimizer",
+  "salary_min": 20,
+  "salary_max": 250
  },
  {
-  "title": "Chemtrade: Sales Account Manager",
+  "title": "react material UI for a small backend - Quotation Request",
   "company": "",
-  "source": "weworkremotely",
-  "url": "https://weworkremotely.com/remote-jobs/chemtrade-sales-account-manager",
-  "salary_min": null,
-  "salary_max": null
- },
- {
-  "title": "CONNEXUS RESOURCE GROUP INC: Customer Service Representative - Work From Home",
-  "company": "",
-  "source": "weworkremotely",
-  "url": "https://weworkremotely.com/remote-jobs/connexus-resource-group-inc-customer-service-representative-work-from-home",
-  "salary_min": null,
-  "salary_max": null
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/javascript/react-material-for-small-backend-40797802",
+  "salary_min": 10,
+  "salary_max": 30
  },
  {
   "title": "High-Accuracy Quotex Trading Bot",
@@ -238,5 +230,13 @@
   "url": "https://www.freelancer.com/projects/backend-development/Real-Time-Chat-API-Backend",
   "salary_min": 250,
   "salary_max": 750
+ },
+ {
+  "title": "AI-Powered Stock Market Analytics & Prediction Application",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/php/Powered-Stock-Market-Analytics",
+  "salary_min": 6000,
+  "salary_max": 6001
  }
 ]
