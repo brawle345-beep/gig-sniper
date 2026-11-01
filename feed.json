@@ -1,5 +1,141 @@
 [
  {
+  "title": "Cloud Engineer Automation",
+  "company": "Smile Digital Health",
+  "source": "remoteok",
+  "url": "https://remoteOK.com/remote-jobs/remote-cloud-engineer-automation-smile-digital-health-1137600",
+  "salary_min": 0,
+  "salary_max": 0
+ },
+ {
+  "title": "ZoomInfo Technologies LLC: Principal Product Manager - Identity",
+  "company": "",
+  "source": "weworkremotely",
+  "url": "https://weworkremotely.com/remote-jobs/zoominfo-technologies-llc-principal-product-manager-identity",
+  "salary_min": null,
+  "salary_max": null
+ },
+ {
+  "title": "Discord: Senior Stock Administrator",
+  "company": "",
+  "source": "weworkremotely",
+  "url": "https://weworkremotely.com/remote-jobs/discord-senior-stock-administrator",
+  "salary_min": null,
+  "salary_max": null
+ },
+ {
+  "title": "Gong.io: Commercial Account Executive",
+  "company": "",
+  "source": "weworkremotely",
+  "url": "https://weworkremotely.com/remote-jobs/gong-io-commercial-account-executive",
+  "salary_min": null,
+  "salary_max": null
+ },
+ {
+  "title": "TekSynap: Application Database Administrator w/Secret Clearance",
+  "company": "",
+  "source": "weworkremotely",
+  "url": "https://weworkremotely.com/remote-jobs/teksynap-application-database-administrator-w-secret-clearance",
+  "salary_min": null,
+  "salary_max": null
+ },
+ {
+  "title": "Axon: Sr Technical Support Representative",
+  "company": "",
+  "source": "weworkremotely",
+  "url": "https://weworkremotely.com/remote-jobs/axon-sr-technical-support-representative",
+  "salary_min": null,
+  "salary_max": null
+ },
+ {
+  "title": "Dropbox: Backend Product Software Engineer",
+  "company": "",
+  "source": "weworkremotely",
+  "url": "https://weworkremotely.com/remote-jobs/dropbox-backend-product-software-engineer",
+  "salary_min": null,
+  "salary_max": null
+ },
+ {
+  "title": "Ritual: Developer Experience Engineer",
+  "company": "",
+  "source": "weworkremotely",
+  "url": "https://weworkremotely.com/remote-jobs/ritual-developer-experience-engineer",
+  "salary_min": null,
+  "salary_max": null
+ },
+ {
+  "title": "Welocalize: Automation Specialist",
+  "company": "",
+  "source": "weworkremotely",
+  "url": "https://weworkremotely.com/remote-jobs/welocalize-automation-specialist",
+  "salary_min": null,
+  "salary_max": null
+ },
+ {
+  "title": "High-Accuracy Quotex Trading Bot",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/api/High-Accuracy-Quotex-Trading-Bot",
+  "salary_min": 1500,
+  "salary_max": 12500
+ },
+ {
+  "title": "Lottery Data Analysis",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/data-analysis/Lottery-Data-Analysis",
+  "salary_min": 250,
+  "salary_max": 750
+ },
+ {
+  "title": "Dual WordPress-Analytics Resume",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/resumes/Dual-WordPress-Analytics-Resume",
+  "salary_min": 2,
+  "salary_max": 8
+ },
+ {
+  "title": "Indoor 3D Mapping with Stereo SLAM -- 2",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/computer-vision/Indoor-Mapping-with-Stereo-SLAM",
+  "salary_min": 750,
+  "salary_max": 1250
+ },
+ {
+  "title": "Self-Hosted WhatsApp API Integration ",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/api-developmet/Self-Hosted-WhatsApp-API-Integration",
+  "salary_min": 600,
+  "salary_max": 1500
+ },
+ {
+  "title": "AI Automation Engineer & Python Instructor – Long-Term Mentorship",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/ai-automation/Automation-Engineer-Python-Instructor",
+  "salary_min": 250,
+  "salary_max": 750
+ },
+ {
+  "title": "Physics Lab Data Analysis",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/mathematics/Physics-Lab-Data-Analysis",
+  "salary_min": 30,
+  "salary_max": 250
+ },
+ {
+  "title": "Beginner Python ML Score Predictor",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/data-analysis/Beginner-Python-Score-Predictor",
+  "salary_min": 12500,
+  "salary_max": 37500
+ },
+ {
   "title": "Crypto Quant Researcher – Proven Pump/Dump & Pre-Breakout Strategy | Existing Bybit Bot",
   "company": "",
   "source": "freelancer",
@@ -22,5 +158,85 @@
   "url": "https://www.freelancer.com/projects/jitsi/Jitsi-WebRTC-Engineer-Customize-Jitsi-40796475",
   "salary_min": 30,
   "salary_max": 250
+ },
+ {
+  "title": "Excel Data Cleaning & Charts",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/data-visualization/Excel-Data-Cleaning-Charts",
+  "salary_min": 750,
+  "salary_max": 1250
+ },
+ {
+  "title": "Build Printing Production Monitoring Dashboard",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/fastapi/Build-Printing-Production-Monitoring",
+  "salary_min": 12500,
+  "salary_max": 37500
+ },
+ {
+  "title": "Smart Canteen System Source Code",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/flask/Smart-Canteen-System-Source-Code",
+  "salary_min": 12500,
+  "salary_max": 37500
+ },
+ {
+  "title": "Open-Source LLM Deployment Specialist",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/ollama/Open-Source-LLM-Deployment-Specialist",
+  "salary_min": 75000,
+  "salary_max": 150000
+ },
+ {
+  "title": "Desktop CSV-to-Excel Converter",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/pandas/Desktop-CSV-Excel-Converter",
+  "salary_min": 30,
+  "salary_max": 250
+ },
+ {
+  "title": "AI Chatbot & Automation Developer – Facebook, TikTok, n8n, Google Forms",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/ai-chatbot/Chatbot-Automation-Developer-Facebook",
+  "salary_min": 250,
+  "salary_max": 750
+ },
+ {
+  "title": "Real-Time Chat API Backend",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/backend-development/Real-Time-Chat-API-Backend",
+  "salary_min": 250,
+  "salary_max": 750
+ },
+ {
+  "title": "AI-Powered Stock Market Analytics & Prediction Application",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/php/Powered-Stock-Market-Analytics",
+  "salary_min": 6000,
+  "salary_max": 6001
+ },
+ {
+  "title": "AI 3D Defect Detection Model",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/3d-reconstruction-mapping/Defect-Detection-Model",
+  "salary_min": 500000,
+  "salary_max": 1000000
+ },
+ {
+  "title": "Abaqus Pile Results Extraction",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/abaqus/Abaqus-Pile-Results-Extraction",
+  "salary_min": 1500,
+  "salary_max": 12500
  }
 ]
