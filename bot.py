@@ -13,7 +13,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
 TOKEN = os.environ.get("BOT_TOKEN")
-FEED_URL = "https://raw.githubusercontent.com/brawle345-beep/снайпер-гиг/main/feed.json"
+FEED_URL = "https://raw.githubusercontent.com/brawle345-beep/gig-sniper/main/feed.json"
 DB_FILE = "users.json"
 
 # --- База данных ---
