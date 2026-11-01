@@ -21,7 +21,7 @@ DB_FILE = "users.json"
 ADMIN_ID = "7183342708"
 
 # 🚨 ВЫКЛЮЧАТЕЛЬ ТЕХ. ОБСЛУЖИВАНИЯ 🚨
-MAINTENANCE_MODE = False
+MAINTENANCE_MODE = True
 
 def load_db():
     if os.path.exists(DB_FILE):
