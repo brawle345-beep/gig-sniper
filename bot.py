@@ -109,7 +109,7 @@ async def buy_premium(callback: CallbackQuery):
         payload="premium_30",
         provider_token="",
         currency="XTR",
-        prices=[LabeledPrice(label="Доступ", amount=150)],
+        prices=[LabeledPrice(label="Доступ", amount=250)],
     )
     await callback.answer()
 
