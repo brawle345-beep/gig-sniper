@@ -1,6 +1,9 @@
 # language: Python 3.11, file: bot.py
 import os
 import asyncio
+import json
+import time
+import requests
 from threading import Thread
 from flask import Flask
 from aiogram import Bot, Dispatcher, F
@@ -10,18 +13,38 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
 TOKEN = os.environ.get("BOT_TOKEN")
+FEED_URL = "https://raw.githubusercontent.com/brawle345-beep/снайпер-гиг/main/feed.json"
+DB_FILE = "users.json"
 
-# --- Flask (нужен, чтобы Render не засыпал) ---
+# --- База данных ---
+def load_db():
+    if os.path.exists(DB_FILE):
+        with open(DB_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_db(db):
+    with open(DB_FILE, "w") as f:
+        json.dump(db, f)
+
+def has_premium(user_id):
+    db = load_db()
+    uid = str(user_id)
+    if uid in db:
+        if db[uid] > time.time():
+            return True
+        else:
+            del db[uid] # просрочка
+            save_db(db)
+    return False
+
+# --- Flask (чтобы Render не засыпал) ---
 app = Flask(__name__)
-
 @app.route('/')
-def home():
-    return "Bot is running!"
+def home(): return "Bot is running!"
+def run_flask(): app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
 
-def run_flask():
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
-
-# --- Aiogram (сам бот) ---
+# --- Aiogram ---
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
@@ -44,12 +67,38 @@ async def start(message: Message):
 
 @dp.callback_query(F.data == "show_jobs")
 async def show_jobs(callback: CallbackQuery):
-    # В будущем здесь можно читать feed.json с GitHub
-    await callback.message.edit_text(
-        "🔥 <b>Свежие вакансии</b>\n\n"
-        "Здесь будут появляться вакансии. (Настройка фида в процессе)",
-        reply_markup=get_main_menu()
-    )
+    await callback.message.edit_text("🔄 Загружаю свежие вакансии...")
+    
+    try:
+        r = requests.get(FEED_URL, timeout=10)
+        jobs = r.json() if r.status_code == 200 else []
+    except Exception:
+        jobs = []
+
+    if not jobs:
+        await callback.message.edit_text(
+            "Пока новых вакансий нет. Я проверяю доски каждые 10 минут. Загляни позже!", 
+            reply_markup=get_main_menu()
+        )
+        return
+
+    is_premium = has_premium(callback.from_user.id)
+    
+    # Если премиум — показываем 10, если нет — только 3
+    limit = 10 if is_premium else 3
+    text = "🔥 <b>Свежие вакансии:</b>\n\n"
+    
+    for job in jobs[:limit]:
+        title = job.get("title", "Без названия")
+        company = job.get("company", "Не указана")
+        url = job.get("url", "")
+        text += f"▪️ <a href='{url}'>{title}</a>\n🏢 {company}\n\n"
+    
+    if not is_premium:
+        text += f"🔒 <i>Показано {limit} из {len(jobs)} вакансий.</i>\n"
+        text += "💎 Купи Премиум, чтобы видеть их все."
+    
+    await callback.message.edit_text(text, reply_markup=get_main_menu(), disable_web_page_preview=True)
     await callback.answer()
 
 @dp.callback_query(F.data == "buy_premium")
@@ -59,7 +108,7 @@ async def buy_premium(callback: CallbackQuery):
         title="Премиум доступ",
         description="Полный доступ к базе вакансий на 30 дней",
         payload="premium_30",
-        provider_token="", # Для Telegram Stars оставляем пустым
+        provider_token="",
         currency="XTR",
         prices=[LabeledPrice(label="Доступ", amount=150)],
     )
@@ -71,17 +120,19 @@ async def pre_checkout(q: PreCheckoutQuery):
 
 @dp.message(F.successful_payment)
 async def on_paid(message: Message):
-    await message.answer("✅ <b>Оплата прошла!</b> Доступ открыт на 30 дней. Скоро здесь появятся вакансии.", reply_markup=get_main_menu())
+    db = load_db()
+    uid = str(message.from_user.id)
+    # Добавляем 30 дней к текущему времени
+    db[uid] = time.time() + (30 * 86400)
+    save_db(db)
+    
+    await message.answer("✅ <b>Оплата прошла!</b> Доступ открыт на 30 дней. Жми «Свежие вакансии»!", reply_markup=get_main_menu())
 
 @dp.callback_query(F.data == "invite")
 async def invite(callback: CallbackQuery):
     me = await bot.get_me()
     link = f"https://t.me/{me.username}?start=ref_{callback.from_user.id}"
-    text = (
-        "🎁 <b>Реферальная программа</b>\n\n"
-        f"Твоя ссылка:\n<code>{link}</code>\n\n"
-        "За каждого друга, который зайдет по ней, ты получаешь +7 дней Премиума бесплатно!"
-    )
+    text = f"🎁 <b>Реферальная программа</b>\n\nТвоя ссылка:\n<code>{link}</code>\n\nЗа друга — +7 дней Премиума!"
     await callback.message.edit_text(text, reply_markup=get_main_menu(), disable_web_page_preview=True)
     await callback.answer()
 
