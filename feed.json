@@ -1,29 +1,5 @@
 [
  {
-  "title": "Gong.io: Commercial Account Executive",
-  "company": "",
-  "source": "weworkremotely",
-  "url": "https://weworkremotely.com/remote-jobs/gong-io-commercial-account-executive",
-  "salary_min": null,
-  "salary_max": null
- },
- {
-  "title": "TekSynap: Application Database Administrator w/Secret Clearance",
-  "company": "",
-  "source": "weworkremotely",
-  "url": "https://weworkremotely.com/remote-jobs/teksynap-application-database-administrator-w-secret-clearance",
-  "salary_min": null,
-  "salary_max": null
- },
- {
-  "title": "Axon: Sr Technical Support Representative",
-  "company": "",
-  "source": "weworkremotely",
-  "url": "https://weworkremotely.com/remote-jobs/axon-sr-technical-support-representative",
-  "salary_min": null,
-  "salary_max": null
- },
- {
   "title": "Dropbox: Backend Product Software Engineer",
   "company": "",
   "source": "weworkremotely",
@@ -48,20 +24,44 @@
   "salary_max": null
  },
  {
+  "title": "AI Solution Development Support",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/ai-development/Solution-Development-Support",
+  "salary_min": 250,
+  "salary_max": 750
+ },
+ {
+  "title": "Product-Price Comparison AI",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/selenium/Product-Price-Comparison",
+  "salary_min": 750,
+  "salary_max": 1250
+ },
+ {
+  "title": "AI CCTV Pizza Outlet Event Detection",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/computer-vision/CCTV-Pizza-Outlet-Event-Detection",
+  "salary_min": 1500,
+  "salary_max": 12500
+ },
+ {
+  "title": "Online School Grading Portal",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/web-development/Online-School-Grading-Portal",
+  "salary_min": 30,
+  "salary_max": 250
+ },
+ {
   "title": "Cricket Color Trading MVP",
   "company": "",
   "source": "freelancer",
   "url": "https://www.freelancer.com/projects/web-development/Cricket-Color-Trading-MVP",
   "salary_min": 12500,
   "salary_max": 37500
- },
- {
-  "title": "Dual WordPress-Analytics Resume",
-  "company": "",
-  "source": "freelancer",
-  "url": "https://www.freelancer.com/projects/resumes/Dual-WordPress-Analytics-Resume",
-  "salary_min": 2,
-  "salary_max": 8
  },
  {
   "title": "Build an AI-Powered PDF Processing & Question Bank Management System",
@@ -86,6 +86,14 @@
   "url": "https://www.freelancer.com/projects/data-analysis/Lottery-Data-Analysis",
   "salary_min": 250,
   "salary_max": 750
+ },
+ {
+  "title": "Dual WordPress-Analytics Resume",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/resumes/Dual-WordPress-Analytics-Resume",
+  "salary_min": 2,
+  "salary_max": 8
  },
  {
   "title": "Indoor 3D Mapping with Stereo SLAM -- 2",
@@ -230,13 +238,5 @@
   "url": "https://www.freelancer.com/projects/abaqus/Abaqus-Pile-Results-Extraction",
   "salary_min": 1500,
   "salary_max": 12500
- },
- {
-  "title": "Decrypt My WhatsApp Chat Backup",
-  "company": "",
-  "source": "freelancer",
-  "url": "https://www.freelancer.com/projects/data-recovery/Decrypt-WhatsApp-Chat-Backup",
-  "salary_min": 600,
-  "salary_max": 1500
  }
 ]
