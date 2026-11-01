@@ -63,15 +63,22 @@ class Lead:
         return datetime.now(timezone.utc) - self.posted < timedelta(hours=MAX_AGE_HOURS)
 
     def to_message(self) -> str:
-        meta = [esc(self.company), esc(self.source)]
-        if self.salary_min or self.salary_max:
-            lo = f"${self.salary_min:,}" if self.salary_min else "?"
-            hi = f"${self.salary_max:,}" if self.salary_max else "?"
-            meta.append(f"{lo} – {hi}")
-        if self.posted:
-            meta.append(self.posted.strftime("%d.%m %H:%M UTC"))
-        body = esc(truncate(strip_tags(self.description), 280))
-        return "\n".join([f"<b>{esc(self.title)}</b>", " · ".join(x for x in meta if x), "", body, self.url])
+    salary = ""
+    if self.salary_min or self.salary_max:
+        lo = f"${self.salary_min:,}" if self.salary_min else "?"
+        hi = f"${self.salary_max:,}" if self.salary_max else "?"
+        salary = f"💰 <b>{lo} – {hi}</b>\n"
+        
+    body = esc(truncate(strip_tags(self.description), 200))
+    
+    return (
+        f"🔥 <b>{esc(self.title)}</b>\n"
+        f"🏢 {esc(self.company) if self.company else 'Не указана'}\n"
+        f"🌍 {esc(self.source)}\n"
+        f"{salary}\n"
+        f"📝 <i>{body}</i>\n\n"
+        f"👉 <a href='{self.url}'>Откликнуться на вакансию</a>"
+    )
 
 def esc(s: str) -> str:
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
