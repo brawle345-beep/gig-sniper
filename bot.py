@@ -58,6 +58,41 @@ def get_main_menu():
 
 @dp.message(CommandStart())
 async def start(message: Message):
+    db = load_db()
+    uid = str(message.from_user.id)
+    
+    # Добавляем друга в базу, если его там нет (доступ 0 дней)
+    if uid not in db:
+        db[uid] = 0
+        
+    # Проверяем, есть ли реферальный код в ссылке
+    args = message.text.split()
+    if len(args) > 1 and args[1].startswith("ref_"):
+        ref_id = args[1].replace("ref_", "")
+        
+        # Если перешел не сам на себя
+        if ref_id.isdigit() and ref_id != uid:
+            # 1. Начисляем 7 дней тому, кто пригласил
+            if ref_id in db:
+                db[ref_id] += (7 * 86400)
+            else:
+                db[ref_id] = time.time() + (7 * 86400)
+            
+            save_db(db)
+            
+            # 2. Формируем имя друга для уведомления
+            friend_name = message.from_user.first_name
+            if message.from_user.username:
+                friend_name += f" (@{message.from_user.username})"
+            
+            # 3. Отправляем уведомление тебе (пригласившему)
+            try:
+                await bot.send_message(ref_id, f"🎁 По твоей ссылке перешел {friend_name}! Тебе начислено +7 дней Премиума.")
+            except Exception:
+                pass
+    else:
+        save_db(db)
+
     text = (
         "👋 <b>Привет! Я твой карманный снайпер.</b>\n\n"
         "Я сканирую биржи труда и присылаю только свежие заказы.\n"
