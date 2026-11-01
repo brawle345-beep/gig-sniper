@@ -1,5 +1,5 @@
 # language: Python 3.11, file: gig-sniper.py
-# poll job boards, filter by language and score, cap spam, push to Telegram
+# poll job boards, filter by score, cap spam, push to Telegram
 
 from __future__ import annotations
 
@@ -22,13 +22,14 @@ TG_TOKEN = os.environ.get("TG_TOKEN", "")
 TG_CHAT = os.environ.get("TG_CHAT", "")
 KEYWORDS = [k.strip().lower() for k in os.environ.get("KEYWORDS", "python").split(",") if k.strip()]
 NEGATIVE = [k.strip().lower() for k in os.environ.get("NEGATIVE", "unpaid,equity only,commission only,intern").split(",") if k.strip()]
-MIN_SCORE = int(os.environ.get("MIN_SCORE", "3"))  # поднял порог с 2 до 3
+MIN_SCORE = int(os.environ.get("MIN_SCORE", "2"))  # Снизил порог до 2, чтобы ловило больше
 MAX_AGE_HOURS = int(os.environ.get("MAX_AGE_HOURS", "24"))
 MAX_SEND_PER_RUN = 3  # максимум 3 сообщения за запуск
-RU_ONLY = True  # только с кириллицей
+RU_ONLY = False  # ВКЛЮЧАЕМ АНГЛИЙСКИЕ ВАКАНСИИ
 DRY_RUN = os.environ.get("DRY_RUN", "0") == "1"
 STATE = Path("seen.json")
-UA = "gig_sniper/1.0"
+# Притворяемся обычным браузером, чтобы hh.ru не банил так сильно
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 @dataclass
 class Lead:
@@ -65,8 +66,8 @@ class Lead:
     def to_message(self) -> str:
         meta = [esc(self.company), esc(self.source)]
         if self.salary_min or self.salary_max:
-            lo = f"{self.salary_min:,}" if self.salary_min else "?"
-            hi = f"{self.salary_max:,}" if self.salary_max else "?"
+            lo = f"${self.salary_min:,}" if self.salary_min else "?"
+            hi = f"${self.salary_max:,}" if self.salary_max else "?"
             meta.append(f"{lo} – {hi}")
         if self.posted:
             meta.append(self.posted.strftime("%d.%m %H:%M UTC"))
@@ -89,29 +90,28 @@ def _int(x) -> int | None:
         return None
 
 def _parse_iso(s) -> datetime | None:
-    if not s:
-        return None
+    if not s: return None
     try:
         if s.endswith("Z"): s = s[:-1] + "+00:00"
         return datetime.fromisoformat(s).astimezone(timezone.utc)
-    except ValueError:
-        return None
+    except ValueError: return None
 
 def _parse_unix(x) -> datetime | None:
-    try:
-        return datetime.fromtimestamp(int(x), tz=timezone.utc)
-    except (TypeError, ValueError, OSError):
-        return None
+    try: return datetime.fromtimestamp(int(x), tz=timezone.utc)
+    except (TypeError, ValueError, OSError): return None
 
 # --- адаптеры ---
 def fetch_hh(query: str) -> Iterable[Lead]:
-    r = requests.get("https://api.hh.ru/vacancies", params={"text": query, "per_page": 20, "order_by": "publication_time"}, headers={"User-Agent": UA}, timeout=30)
-    r.raise_for_status()
-    for item in r.json().get("items", []):
-        salary = item.get("salary") or {}
-        snippet = item.get("snippet") or {}
-        desc = f"{snippet.get('requirement', '')} {snippet.get('responsibility', '')}"
-        yield Lead("hh.ru", item.get("name", ""), item.get("alternate_url", ""), (item.get("employer") or {}).get("name", ""), desc, _parse_iso(item.get("published_at")), _int(salary.get("from")), _int(salary.get("to")))
+    try:
+        r = requests.get("https://api.hh.ru/vacancies", params={"text": query, "per_page": 20, "order_by": "publication_time"}, headers={"User-Agent": UA}, timeout=30)
+        r.raise_for_status()
+        for item in r.json().get("items", []):
+            salary = item.get("salary") or {}
+            snippet = item.get("snippet") or {}
+            desc = f"{snippet.get('requirement', '')} {snippet.get('responsibility', '')}"
+            yield Lead("hh.ru", item.get("name", ""), item.get("alternate_url", ""), (item.get("employer") or {}).get("name", ""), desc, _parse_iso(item.get("published_at")), _int(salary.get("from")), _int(salary.get("to")))
+    except Exception as e:
+        print(f"hh.ru failed (maybe blocked): {e}", file=sys.stderr)
 
 def fetch_remoteok() -> Iterable[Lead]:
     r = requests.get("https://remoteok.com/api", headers={"User-Agent": UA}, timeout=30)
@@ -184,35 +184,33 @@ def main() -> int:
 
     def handle(lead: Lead) -> None:
         nonlocal shipped
-        if shipped >= MAX_SEND_PER_RUN: return # лимит спама
-        key = lead_key(lead)
+        if shipped >= MAX_SEND_PER_RUN: return
         
+        key = lead_key(lead)
         text_to_check = f"{lead.title} {lead.description}"
+        
+        # Если включен RU_ONLY, а текста на русском нет — скипаем
         if RU_ONLY and not has_cyrillic(text_to_check):
             seen.setdefault(key, int(time.time()))
-            return # если нет русских букв — скипаем
+            return 
             
         if key in seen or not lead.fresh() or lead.score() < MIN_SCORE:
             seen.setdefault(key, int(time.time()))
             return
+            
         if send(lead.to_message()):
             seen[key] = int(time.time())
             shipped += 1
             time.sleep(0.5)
 
-    # hh.ru
     for kw in KEYWORDS[:5]:
-        try:
-            for lead in fetch_hh(kw): handle(lead)
-        except Exception as e: print(f"hh[{kw}] failed: {e}", file=sys.stderr)
+        for lead in fetch_hh(kw): handle(lead)
 
-    # международные (с фильтром на кириллицу)
     for source in SOURCES:
         try:
             for lead in source(): handle(lead)
         except Exception as e: print(f"{source.__name__} failed: {e}", file=sys.stderr)
 
-    # фриланс
     for kw in KEYWORDS[:3]:
         try:
             for lead in fetch_freelancer(kw): handle(lead)
