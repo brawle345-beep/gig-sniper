@@ -74,9 +74,11 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS referrals (
                 referrer BIGINT NOT NULL,
                 referred BIGINT NOT NULL,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
                 PRIMARY KEY (referrer, referred),
                 UNIQUE (referred)
             );
+            ALTER TABLE referrals ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();
             
             CREATE TABLE IF NOT EXISTS channels (
                 name VARCHAR(255) PRIMARY KEY
@@ -87,12 +89,13 @@ async def init_db():
                 value VARCHAR(50)
             );
             
-            -- Таблица для оплаченных вакансий (с колонкой text)
             CREATE TABLE IF NOT EXISTS pending_vacancies (
                 user_id BIGINT PRIMARY KEY,
                 paid_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
                 text TEXT DEFAULT NULL
             );
+            -- КРИТИЧЕСКИЙ ФИКС: добавляем колонку text, если таблица старая
+            ALTER TABLE pending_vacancies ADD COLUMN IF NOT EXISTS text TEXT DEFAULT NULL;
         """)
         
         count = await c.fetchval("SELECT COUNT(*) FROM channels")
@@ -168,11 +171,21 @@ async def apply_referral(ref_id: int, new_uid: int) -> bool:
         p = await get_pool()
         async with p.acquire() as c:
             async with c.transaction():
+                # Анти-ботнет: не больше 3 рефералов в сутки
+                today_count = await c.fetchval("""
+                    SELECT COUNT(*) FROM referrals 
+                    WHERE referrer = $1 AND created_at > NOW() - interval '1 day'
+                """, ref_id)
+                
+                if today_count >= 3:
+                    return False
+
                 claimed = await c.fetchval("""
                     INSERT INTO referrals (referrer, referred) VALUES ($1, $2)
                     ON CONFLICT DO NOTHING RETURNING referrer
                 """, ref_id, new_uid)
                 if claimed is None: return False
+                
                 await c.execute("""
                     INSERT INTO users (user_id, premium_until)
                     VALUES ($1, NOW() + interval '7 days')
@@ -469,7 +482,7 @@ async def render_job(cb: CallbackQuery, index: int):
     kb.append([InlineKeyboardButton(text="🏠 В меню", callback_data="main_menu")])
     await safe_edit(cb.message, text, InlineKeyboardMarkup(inline_keyboard=kb))
 
-# ---------- Инлайн ----------
+# ---------- Инлайн (С анти-халявой) ----------
 @dp.inline_query()
 async def inline_search(query: InlineQuery):
     try:
@@ -477,7 +490,11 @@ async def inline_search(query: InlineQuery):
         results = []
         search_q = query.query.lower()
         
-        for i, j in enumerate(jobs[:15]):
+        # ПРОВЕРКА ПРЕМИУМА: 3 для бесплатных, 15 для премиума
+        is_prem = await has_premium(query.from_user.id)
+        limit = 15 if is_prem else 3
+        
+        for i, j in enumerate(jobs[:limit]):
             if search_q and search_q not in j['text'].lower(): continue
             raw_text = re.sub(r'\n{3,}', '\n\n', j['text'].strip())[:100] + "..."
             safe_desc = escape(raw_text)
@@ -499,6 +516,16 @@ async def cancel_handler(message: Message, state: FSMContext):
     if current_state is None: return
     await state.clear()
     
+    # Обработка отмены для оплаченной вакансии
+    if current_state == UserStates.waiting_for_vacancy.state:
+        try:
+            p = await get_pool()
+            async with p.acquire() as c:
+                await c.execute("DELETE FROM pending_vacancies WHERE user_id = $1", message.from_user.id)
+        except Exception: pass
+        await message.answer("❌ Публикация отменена. Оплата за вакансию не возвращается.", reply_markup=await build_main_menu(message.from_user.id, str(message.from_user.id) == ADMIN_ID))
+        return
+        
     if current_state in [AdminStates.give_id.state, AdminStates.give_days.state, AdminStates.add_channel.state, AdminStates.del_channel.state]:
         await message.answer("❌ Действие отменено.", reply_markup=get_admin_menu())
     else:
@@ -532,7 +559,6 @@ async def start(message: Message, state: FSMContext):
             try: await bot.send_message(int(raw), f"🎁 По твоей ссылке перешёл {escape(user_name)}! +7 дней.")
             except Exception: pass
 
-    # Проверяем, нет ли у него оплаченной, но неотправленной вакансии
     try:
         p = await get_pool()
         async with p.acquire() as c:
@@ -651,6 +677,16 @@ async def set_filter(message: Message, state: FSMContext):
 async def post_vacancy_start(cb: CallbackQuery):
     await cb.answer()
     
+    # АНТИ-СПАМ: проверяем, нет ли уже оплаченной вакансии
+    try:
+        p = await get_pool()
+        async with p.acquire() as c:
+            has_pending = await c.fetchval("SELECT user_id FROM pending_vacancies WHERE user_id = $1", cb.from_user.id)
+        if has_pending:
+            await cb.answer("⚠️ У тебя уже есть оплаченная вакансия! Сначала отправь её текст в чат.", show_alert=True)
+            return
+    except Exception: pass
+    
     text = (
         "📝 <b>Размещение вакансии</b>\n\n"
         "Твоя вакансия будет опубликована в нашем канале и разослана всем Премиум-пользователям (база живых специалистов).\n\n"
@@ -687,6 +723,11 @@ async def pre_checkout(q: PreCheckoutQuery): await q.answer(ok=True)
 @dp.message(F.successful_payment)
 async def on_paid(message: Message, state: FSMContext):
     payload = message.successful_payment.invoice_payload
+    amount = message.successful_payment.total_amount
+    
+    # АНТИ-ФРОД: проверка суммы
+    if payload == "premium_30" and amount != 250: return
+    if payload == "vacancy_post" and amount != 1500: return
     
     # 1. Оплата Премиума
     if payload == "premium_30":
@@ -738,7 +779,6 @@ async def receive_vacancy(message: Message, state: FSMContext):
         await message.answer("❌ Текст слишком короткий. Вакансия должна содержать детали и контакт. Отправь еще раз:")
         return
 
-    # СОХРАНЯЕМ ТЕКСТ В БАЗУ (чтобы не потерять при перезагрузке)
     try:
         p = await get_pool()
         async with p.acquire() as c:
@@ -750,7 +790,6 @@ async def receive_vacancy(message: Message, state: FSMContext):
 
     safe_text = escape(raw_text)
     
-    # Отправляем на модерацию тебе
     mod_kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Опубликовать", callback_data=f"approve_vac_{message.from_user.id}"),
          InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject_vac_{message.from_user.id}")]
@@ -777,11 +816,15 @@ async def receive_vacancy(message: Message, state: FSMContext):
 @dp.callback_query(F.data.startswith("approve_vac_"))
 async def approve_vacancy(cb: CallbackQuery):
     if str(cb.from_user.id) != ADMIN_ID: return
-    uid = int(cb.data.split("_")[2])
     
+    try:
+        uid = int(cb.data.split("_")[2])
+    except (IndexError, ValueError):
+        await cb.answer("Ошибка данных.", show_alert=True)
+        return
+        
     await cb.answer("Публикую...")
     
-    # Берем оригинальный текст из базы
     try:
         p = await get_pool()
         async with p.acquire() as c:
@@ -805,12 +848,17 @@ async def approve_vacancy(cb: CallbackQuery):
     except Exception as e:
         await safe_edit(cb.message, f"❌ Ошибка постинга в канал: {e}")
         return
+        
+    # 2. Удаляем из pending сразу после постинга
+    try:
+        async with p.acquire() as c:
+            await c.execute("DELETE FROM pending_vacancies WHERE user_id = $1", uid)
+    except Exception: pass
 
-    # 2. Рассылаем Премиумам
+    # 3. Рассылаем Премиумам
     try:
         async with p.acquire() as c:
             users = await c.fetch("SELECT user_id FROM users WHERE premium_until > NOW()")
-            await c.execute("DELETE FROM pending_vacancies WHERE user_id = $1", uid)
             
         kb = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="💬 Оригинал в канале", url=post_url)
@@ -834,8 +882,13 @@ async def approve_vacancy(cb: CallbackQuery):
 @dp.callback_query(F.data.startswith("reject_vac_"))
 async def reject_vacancy(cb: CallbackQuery):
     if str(cb.from_user.id) != ADMIN_ID: return
-    uid = int(cb.data.split("_")[2])
     
+    try:
+        uid = int(cb.data.split("_")[2])
+    except (IndexError, ValueError):
+        await cb.answer("Ошибка данных.", show_alert=True)
+        return
+        
     await cb.answer("Отклонено.")
     try:
         p = await get_pool()
