@@ -47,8 +47,10 @@ async def init_db():
         await c.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id BIGINT PRIMARY KEY,
-                premium_until TIMESTAMP WITH TIME ZONE
+                premium_until TIMESTAMP WITH TIME ZONE,
+                is_paid BOOLEAN DEFAULT FALSE
             );
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS is_paid BOOLEAN DEFAULT FALSE;
             CREATE TABLE IF NOT EXISTS referrals (
                 referrer BIGINT NOT NULL,
                 referred BIGINT NOT NULL,
@@ -99,29 +101,10 @@ async def apply_referral(ref_id: int, new_uid: int) -> bool:
             return True
 
 # ---------- Парсер Телеграм-каналов ----------
-# Актуальные публичные каналы с открытой веб-версией
-TARGET_CHANNELS = [
-    "it_vakansii_jobs",
-    "remote_it_jobs",
-    "python_jobs",
-    "golang_jobs",
-]
-
+TARGET_CHANNELS = ["it_vakansii_jobs", "remote_it_jobs", "python_jobs", "golang_jobs"]
 KEYWORDS = ["python", "react", "frontend", "backend", "разработчик", "верстальщик", "удаленка", "вакансия", "ищу"]
 
 _feed = {"data": None, "ts": 0.0}
-
-def format_vacancy(text: str) -> str:
-    text = re.sub(r'\n{3,}', '\n\n', text.strip())
-    lines = text.split('\n')
-    if lines:
-        lines[0] = f"<b>{lines[0]}</b>"
-    text = '\n'.join(lines)
-    if len(text) > 400:
-        preview = text[:400].rsplit(' ', 1)[0] + "..."
-        remainder = text[400:]
-        return f"{preview}\n\n<tg-spoiler>{remainder}</tg-spoiler>"
-    return text
 
 async def fetch_feed() -> list:
     now = time.time()
@@ -156,7 +139,7 @@ async def fetch_feed() -> list:
     _feed["ts"] = now
     return jobs
 
-# ---------- Flask (Render keepalive) ----------
+# ---------- Flask ----------
 app = Flask(__name__)
 @app.route("/")
 def home(): return "Bot is running!"
@@ -183,7 +166,7 @@ dp.callback_query.middleware(Maintenance())
 # ---------- Меню ----------
 def get_main_menu(is_admin=False):
     kb = [
-        [InlineKeyboardButton(text="🔥 Смотреть вакансии", callback_data="show_jobs")],
+        [InlineKeyboardButton(text="🔥 Смотреть вакансии", callback_data="show_jobs:0")],
         [InlineKeyboardButton(text="💎 Премиум-доступ", callback_data="buy_premium"), InlineKeyboardButton(text="👤 Профиль", callback_data="my_status")],
         [InlineKeyboardButton(text="🎁 Пригласить друга", callback_data="invite")],
         [InlineKeyboardButton(text="📢 Наш канал", url="https://t.me/gigsnipervakansii")],
@@ -192,9 +175,66 @@ def get_main_menu(is_admin=False):
         kb.insert(0, [InlineKeyboardButton(text="🛠 Админ-панель", callback_data="admin_panel")])
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
-async def safe_edit(message: Message, text: str, reply_markup=None):
+# ---------- Логика Карточек (Пагинация) ----------
+async def render_job(cb: CallbackQuery, index: int):
+    jobs = await fetch_feed()
+    is_prem = await has_premium(cb.from_user.id)
+    limit = 10 if is_prem else 3
+    jobs = jobs[:limit]
+    
+    if not jobs:
+        await cb.message.edit_text("😴 Пока новых вакансий нет. Загляни позже!", reply_markup=get_main_menu(str(cb.from_user.id) == ADMIN_ID))
+        return
+
+    index = max(0, min(index, len(jobs) - 1))
+    job = jobs[index]
+    
+    # Жесткая обрезка текста, чтобы карточка не "плыла" вниз
+    raw_text = re.sub(r'\n{3,}', '\n\n', job['text'].strip())
+    if len(raw_text) > 600:
+        raw_text = raw_text[:600].rsplit(' ', 1)[0] + "..."
+    
+    text = (
+        f"<b>💼 Вакансия {index+1} из {len(jobs)}</b>\n"
+        f"<i>Источник: @{job['channel']}</i>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        f"{raw_text}"
+    )
+    
+    # Кнопки навигации (строго в одном ряду)
+    nav_row = []
+    if index > 0:
+        nav_row.append(InlineKeyboardButton(text="⬅️", callback_data=f"show_jobs:{index-1}"))
+    else:
+        nav_row.append(InlineKeyboardButton(text="⬅️", callback_data="ignore"))
+        
+    nav_row.append(InlineKeyboardButton(text=f"{index+1}/{len(jobs)}", callback_data="ignore"))
+    
+    if index < len(jobs) - 1:
+        nav_row.append(InlineKeyboardButton(text="➡️", callback_data=f"show_jobs:{index+1}"))
+    else:
+        nav_row.append(InlineKeyboardButton(text="➡️", callback_data="ignore"))
+
+    kb = [nav_row]
+    
+    # Кнопки связи
+    contact_row = []
+    if job.get('contact_url'):
+        contact_row.append(InlineKeyboardButton(text="💬 Написать", url=job['contact_url']))
+    if job.get('post_url'):
+        contact_row.append(InlineKeyboardButton(text="🔗 Оригинал", url=job['post_url']))
+    if contact_row:
+        kb.append(contact_row)
+        
+    if not is_prem:
+         kb.append([InlineKeyboardButton(text="💎 Купить Премиум", callback_data="buy_premium")])
+
+    kb.append([InlineKeyboardButton(text="🏠 В меню", callback_data="main_menu")])
+    
+    markup = InlineKeyboardMarkup(inline_keyboard=kb)
+    
     try:
-        await message.edit_text(text, reply_markup=reply_markup, disable_web_page_preview=True)
+        await cb.message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e):
             log.warning("edit: %s", e)
@@ -228,45 +268,26 @@ async def start(message: Message):
         reply_markup=get_main_menu(is_admin),
     )
 
-@dp.callback_query(F.data == "show_jobs")
+@dp.callback_query(F.data == "main_menu")
+async def back_to_menu(cb: CallbackQuery):
+    await cb.message.edit_text("⚡️ <b>Главное меню:</b>", reply_markup=get_main_menu(str(cb.from_user.id) == ADMIN_ID))
+    await cb.answer()
+
+@dp.callback_query(F.data.startswith("show_jobs:"))
 async def show_jobs(cb: CallbackQuery):
-    await safe_edit(cb.message, "🔄 <i>Сканирую каналы...</i>")
-    jobs = await fetch_feed()
-    is_admin = str(cb.from_user.id) == ADMIN_ID
-    if not jobs:
-        await safe_edit(cb.message, "😴 Пока новых вакансий нет. Загляни позже!", reply_markup=get_main_menu(is_admin))
-        await cb.answer()
-        return
-    is_prem = await has_premium(cb.from_user.id)
-    limit = 10 if is_prem else 3
-    header = (
-        "✨ <b>СВЕЖИЕ ВАКАНСИИ</b> ✨\n"
-        f"<i>Найдено {len(jobs)} актуальных предложений</i>\n"
-        "━━━━━━━━━━━━━━━━━━"
-    )
-    await safe_edit(cb.message, header, reply_markup=get_main_menu(is_admin))
-    for i, j in enumerate(jobs[:limit], 1):
-        buttons = []
-        if j.get('contact_url'):
-            buttons.append([InlineKeyboardButton(text="💬 Написать заказчику", url=j['contact_url'])])
-        if j.get('post_url'):
-            buttons.append([InlineKeyboardButton(text="🔗 Оригинал в TG", url=j['post_url'])])
-        kb = InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
-        clean_text = format_vacancy(j['text'])
-        card = f"<b>#{i} | Из канала @{j['channel']}</b>\n\n{clean_text}"
-        await cb.message.answer(card, reply_markup=kb, disable_web_page_preview=True)
-        await asyncio.sleep(0.3)
-    if not is_prem and len(jobs) > 3:
-        await cb.message.answer(
-            f"🔒 <i>Показано 3 из {len(jobs)}.</i>\n\n"
-            "💎 <b>Оформи Премиум</b>, чтобы видеть весь поток заказов без ограничений.",
-            reply_markup=get_main_menu(is_admin)
-        )
+    index = int(cb.data.split(":")[1])
+    if index == 0 and not cb.message.text.startswith("💼"):
+        await cb.message.edit_text("🔄 <i>Сканирую каналы...</i>")
+    await render_job(cb, index)
+    await cb.answer()
+
+@dp.callback_query(F.data == "ignore")
+async def ignore_btn(cb: CallbackQuery):
     await cb.answer()
 
 @dp.callback_query(F.data == "buy_premium")
 async def buy_premium(cb: CallbackQuery):
-    await safe_edit(cb.message, "💎 <b>Счёт отправлен ниже.</b>\n\nПосле оплаты доступ откроется автоматически.", reply_markup=get_main_menu(str(cb.from_user.id) == ADMIN_ID))
+    await cb.message.edit_text("💎 <b>Счёт отправлен ниже.</b>\n\nПосле оплаты доступ откроется автоматически.", reply_markup=get_main_menu(str(cb.from_user.id) == ADMIN_ID))
     await bot.send_invoice(
         chat_id=cb.from_user.id,
         title="Премиум доступ (30 дней)",
@@ -287,6 +308,9 @@ async def on_paid(message: Message):
     if message.successful_payment.invoice_payload != "premium_30": return
     try:
         await add_premium_days(message.from_user.id, 30)
+        p = await get_pool()
+        async with p.acquire() as c:
+            await c.execute("UPDATE users SET is_paid = TRUE WHERE user_id = $1", message.from_user.id)
         name = escape(message.from_user.first_name)
         if message.from_user.username: name += f" (@{message.from_user.username})"
         await bot.send_message(ADMIN_ID, f"💰 <b>Новая оплата!</b>\nЮзер: {name}\nID: <code>{message.from_user.id}</code>")
@@ -297,7 +321,7 @@ async def on_paid(message: Message):
 async def invite(cb: CallbackQuery):
     me = await bot.get_me()
     link = f"https://t.me/{me.username}?start=ref_{cb.from_user.id}"
-    await safe_edit(cb.message,
+    await cb.message.edit_text(
         f"🎁 <b>Партнёрская программа</b>\n\n"
         f"Приглашай друзей и получай дни Премиума.\n\n"
         f"Твоя ссылка:\n<code>{link}</code>\n\n"
@@ -317,7 +341,7 @@ async def my_status(cb: CallbackQuery):
             text = f"💎 <b>Статус:</b> Премиум\n<blockquote>Осталось дней: <b>{days}</b></blockquote>"
         else:
             text = "👤 <b>Статус:</b> Бесплатный\n<blockquote>Доступно 3 вакансии.</blockquote>"
-    await safe_edit(cb.message, text, reply_markup=get_main_menu(uid == ADMIN_ID))
+    await cb.message.edit_text(text, reply_markup=get_main_menu(uid == ADMIN_ID))
     await cb.answer()
 
 @dp.callback_query(F.data == "admin_panel")
@@ -326,23 +350,36 @@ async def admin_panel(cb: CallbackQuery):
     p = await get_pool()
     async with p.acquire() as c:
         total = await c.fetchval("SELECT COUNT(*) FROM users")
-        premium_users = await c.fetch("SELECT user_id, premium_until FROM users WHERE premium_until > NOW()")
+        premium_users = await c.fetch("SELECT user_id, premium_until FROM users WHERE premium_until > NOW() AND is_paid = TRUE")
+        trial_users = await c.fetchval("SELECT COUNT(*) FROM users WHERE premium_until > NOW() AND is_paid = FALSE")
+    
     prem_count = len(premium_users)
     prem_list = ""
     for u in premium_users:
         if str(u['user_id']) == ADMIN_ID: continue
         until_str = u['premium_until'].strftime("%d.%m.%Y")
         prem_list += f"🔹 <code>{u['user_id']}</code> — до {until_str}\n"
+
     text = (
         f"🛠 <b>Админ-панель</b>\n\n"
-        f"👥 Юзеров: <b>{total}</b>\n"
-        f"💎 Активных подписок: <b>{prem_count}</b>\n"
-        f"💰 Доход: <b>{prem_count * 250} ⭐</b>\n\n"
+        f"👥 Всего юзеров: <b>{total}</b>\n"
+        f"💎 <b>Купивших Премиум: {prem_count}</b>\n"
+        f"🎁 На триале/рефках: <b>{trial_users}</b>\n"
+        f"💰 Реальный доход: <b>{prem_count * 250} ⭐</b>\n\n"
     )
     if prem_list: text += f"<b>Список купивших (ID):</b>\n{prem_list}"
     else: text += "<i>Пока никто не купил.</i>"
-    await safe_edit(cb.message, text, reply_markup=get_main_menu(True))
+
+    await cb.message.edit_text(text, reply_markup=get_main_menu(True))
     await cb.answer()
+
+@dp.message(F.text == "/clear_fakes")
+async def clear_fakes(message: Message):
+    if str(message.from_user.id) != ADMIN_ID: return
+    p = await get_pool()
+    async with p.acquire() as c:
+        await c.execute("UPDATE users SET premium_until = NOW() WHERE is_paid = FALSE")
+    await message.answer("🧹 Все неоплаченные подписки (триалы и рефки) сброшены.")
 
 @dp.message(F.text.startswith("/give "))
 async def give_premium(message: Message):
