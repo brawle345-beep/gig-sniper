@@ -113,7 +113,6 @@ async def fetch_feed() -> list:
             async with s.get(FEED_URL) as r:
                 if r.status != 200:
                     return _feed["data"] or []
-                # Скачиваем как текст и парсим вручную, игнорируя строгий заголовок GitHub
                 raw_text = await r.text()
                 data = json.loads(raw_text)
                 
@@ -182,13 +181,14 @@ async def start(message: Message):
 
     until = await get_premium_until(uid)
     if until is None:
-        await add_premium_days(uid, 0)
+        # Даем 3 дня бесплатно новым пользователям
+        await add_premium_days(uid, 3)
         if not is_admin:
             try:
                 name = escape(message.from_user.first_name)
                 if message.from_user.username:
                     name += f" (@{message.from_user.username})"
-                await bot.send_message(ADMIN_ID, f"👤 <b>Новый юзер</b>\n{name}\nID: <code>{uid}</code>")
+                await bot.send_message(ADMIN_ID, f"👤 <b>Новый юзер</b>\n{name}\nID: <code>{uid}</code>\n🎁 Выдан триал на 3 дня.")
             except Exception:
                 pass
 
@@ -207,6 +207,8 @@ async def start(message: Message):
         "🤖 Это <b>Gig Sniper</b> — радар свежих IT-вакансий и заказов.\n\n"
         "<blockquote>Сканируем биржи каждые 10 минут, отсеиваем шлак, "
         "присылаем только актуальное в долларах и рублях.</blockquote>\n\n"
+        "🎁 <b>Тебе начислено 3 дня Премиума бесплатно!</b>\n"
+        "Пользуйся полным доступом, пока не решишь оформить подписку на месяц.\n\n"
         "⚡️ <b>Выбери действие:</b>",
         reply_markup=get_main_menu(is_admin),
     )
@@ -295,7 +297,7 @@ async def my_status(cb: CallbackQuery):
             days = int((until.timestamp() - time.time()) / 86400)
             text = f"💎 <b>Статус:</b> Премиум\n<blockquote>Осталось дней: <b>{days}</b></blockquote>"
         else:
-            text = "👤 <b>Статус:</b> Бесплатный\n<blockquote>Доступно 3 вакансии.</blockquote>"
+            text = "👤 <b>Статус:</b> Бесплатный\n<blockquote>Доступно 3 вакансии.\n🎁 Триал кончился — купи Премиум для полного доступа.</blockquote>"
     await safe_edit(cb.message, text, reply_markup=get_main_menu(uid == ADMIN_ID))
     await cb.answer()
 
