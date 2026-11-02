@@ -16,7 +16,8 @@ from flask import Flask
 from aiogram import Bot, Dispatcher, F, BaseMiddleware
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
-    LabeledPrice, PreCheckoutQuery, TelegramObject, InlineQuery, InlineQueryResultArticle, InputTextMessageContent
+    LabeledPrice, PreCheckoutQuery, TelegramObject, InlineQuery, 
+    InlineQueryResultArticle, InputTextMessageContent, ErrorEvent
 )
 from aiogram.filters import CommandStart, Command
 from aiogram.client.default import DefaultBotProperties
@@ -101,22 +102,33 @@ async def init_db():
             IS_MAINTENANCE = (maint_val == '1')
 
 async def get_channels() -> list:
-    p = await get_pool()
-    async with p.acquire() as c:
-        rows = await c.fetch("SELECT name FROM channels")
-        return [r['name'] for r in rows]
+    try:
+        p = await get_pool()
+        async with p.acquire() as c:
+            rows = await c.fetch("SELECT name FROM channels")
+            return [r['name'] for r in rows]
+    except Exception as e:
+        log.error(f"DB error get_channels: {e}")
+        return [] # Возвращаем пустой список, если база недоступна
 
 async def get_premium_until(user_id: int):
-    p = await get_pool()
-    async with p.acquire() as c:
-        row = await c.fetchrow("SELECT premium_until FROM users WHERE user_id = $1", user_id)
-    return row["premium_until"] if row else None
+    try:
+        p = await get_pool()
+        async with p.acquire() as c:
+            row = await c.fetchrow("SELECT premium_until FROM users WHERE user_id = $1", user_id)
+        return row["premium_until"] if row else None
+    except Exception as e:
+        log.error(f"DB error get_premium_until: {e}")
+        return None
 
 async def get_user_filter(user_id: int):
-    p = await get_pool()
-    async with p.acquire() as c:
-        row = await c.fetchrow("SELECT filter_word FROM users WHERE user_id = $1", user_id)
-    return row["filter_word"] if row else None
+    try:
+        p = await get_pool()
+        async with p.acquire() as c:
+            row = await c.fetchrow("SELECT filter_word FROM users WHERE user_id = $1", user_id)
+        return row["filter_word"] if row else None
+    except Exception:
+        return None
 
 async def add_premium_days(user_id: int, days: int):
     p = await get_pool()
@@ -144,22 +156,26 @@ async def check_sub(user_id: int) -> bool:
 
 async def apply_referral(ref_id: int, new_uid: int) -> bool:
     if ref_id == new_uid: return False
-    p = await get_pool()
-    async with p.acquire() as c:
-        async with c.transaction():
-            claimed = await c.fetchval("""
-                INSERT INTO referrals (referrer, referred) VALUES ($1, $2)
-                ON CONFLICT DO NOTHING RETURNING referrer
-            """, ref_id, new_uid)
-            if claimed is None: return False
-            await c.execute("""
-                INSERT INTO users (user_id, premium_until)
-                VALUES ($1, NOW() + interval '7 days')
-                ON CONFLICT (user_id) DO UPDATE
-                SET premium_until = GREATEST(COALESCE(users.premium_until, NOW()), NOW())
-                                    + interval '7 days'
-            """, ref_id)
-            return True
+    try:
+        p = await get_pool()
+        async with p.acquire() as c:
+            async with c.transaction():
+                claimed = await c.fetchval("""
+                    INSERT INTO referrals (referrer, referred) VALUES ($1, $2)
+                    ON CONFLICT DO NOTHING RETURNING referrer
+                """, ref_id, new_uid)
+                if claimed is None: return False
+                await c.execute("""
+                    INSERT INTO users (user_id, premium_until)
+                    VALUES ($1, NOW() + interval '7 days')
+                    ON CONFLICT (user_id) DO UPDATE
+                    SET premium_until = GREATEST(COALESCE(users.premium_until, NOW()), NOW())
+                                        + interval '7 days'
+                """, ref_id)
+                return True
+    except Exception as e:
+        log.error(f"DB error apply_referral: {e}")
+        return False
 
 # ---------- Парсер ----------
 REQUIRED_WORDS = ["python", "react", "frontend", "backend", "разработчик", "верстальщик", "удаленка", "вакансия", "ищу", "требуется", "looking for", "hiring"]
@@ -186,6 +202,9 @@ async def fetch_feed() -> list:
         headers = {"User-Agent": "Mozilla/5.0"}
         channels = await get_channels()
         
+        if not channels:
+            return []
+
         async with aiohttp.ClientSession(headers=headers) as session:
             for channel in channels:
                 url = f"https://t.me/s/{channel}"
@@ -231,6 +250,11 @@ async def autopush_worker():
                     
                     if last_sent_id != latest_job['post_url']:
                         async with p.acquire() as c:
+                            await c.execute("""
+                                INSERT INTO settings (key, value) VALUES ('last_pushed', $1)
+                                ON CONFLICT (key) DO UPDATE SET value = $1
+                            """, latest_job['post_url'])
+                            
                             users = await c.fetch("SELECT user_id FROM users WHERE premium_until > NOW()")
                         
                         raw_text = re.sub(r'\n{3,}', '\n\n', latest_job['text'].strip())
@@ -240,21 +264,12 @@ async def autopush_worker():
                             InlineKeyboardButton(text="🔥 Открыть в боте", url=f"https://t.me/{bot_me.username}?start=push")
                         ]])
                         
-                        success_count = 0
                         for u in users:
                             if str(u['user_id']) == ADMIN_ID: continue
                             try:
                                 await bot.send_message(u['user_id'], push_text, reply_markup=kb, disable_web_page_preview=True)
-                                success_count += 1
                                 await asyncio.sleep(0.05)
                             except Exception: pass
-                        
-                        if success_count > 0:
-                            async with p.acquire() as c:
-                                await c.execute("""
-                                    INSERT INTO settings (key, value) VALUES ('last_pushed', $1)
-                                    ON CONFLICT (key) DO UPDATE SET value = $1
-                                """, latest_job['post_url'])
                             
         except Exception as e:
             log.error(f"Autopush error: {e}")
@@ -270,6 +285,17 @@ def run_flask():
 # ---------- Aiogram ----------
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
+
+@dp.errors()
+async def error_handler(event: ErrorEvent):
+    log.error(f"Unhandled error: {event.exception}", exc_info=event.exception)
+    try:
+        if event.update.message:
+            await event.update.message.answer("⚠️ Произошла непредвиденная ошибка. Администратор уведомлен.")
+        elif event.update.callback_query:
+            await event.update.callback_query.answer("⚠️ Произошла ошибка. Попробуйте позже.", show_alert=True)
+    except Exception:
+        pass
 
 class MaintenanceMiddleware(BaseMiddleware):
     async def __call__(self, handler, event: TelegramObject, data: dict):
@@ -345,29 +371,33 @@ async def render_admin_panel(cb: CallbackQuery, state: FSMContext | None = None)
     if state: await state.clear()
     if str(cb.from_user.id) != ADMIN_ID: return
     
-    p = await get_pool()
-    async with p.acquire() as c:
-        total = await c.fetchval("SELECT COUNT(*) FROM users")
-        premium_users = await c.fetch("SELECT user_id, premium_until FROM users WHERE premium_until > NOW() AND is_paid = TRUE")
-        trial_users = await c.fetchval("SELECT COUNT(*) FROM users WHERE premium_until > NOW() AND is_paid = FALSE")
-        channels = await c.fetch("SELECT name FROM channels")
+    try:
+        p = await get_pool()
+        async with p.acquire() as c:
+            total = await c.fetchval("SELECT COUNT(*) FROM users")
+            premium_users = await c.fetch("SELECT user_id, premium_until FROM users WHERE premium_until > NOW() AND is_paid = TRUE")
+            trial_users = await c.fetchval("SELECT COUNT(*) FROM users WHERE premium_until > NOW() AND is_paid = FALSE")
+            channels = await c.fetch("SELECT name FROM channels")
+            
+        prem_count = len(premium_users)
+        ch_list = ", ".join([f"@{r['name']}" for r in channels])
+        maint_status = "🔴 ВКЛЮЧЕНЫ" if IS_MAINTENANCE else "🟢 ВЫКЛЮЧЕНЫ"
         
-    prem_count = len(premium_users)
-    ch_list = ", ".join([f"@{r['name']}" for r in channels])
-    maint_status = "🔴 ВКЛЮЧЕНЫ" if IS_MAINTENANCE else "🟢 ВЫКЛЮЧЕНЫ"
-    
-    text = (
-        f"🛠 <b>Пульт управления</b>\n"
-        "━━━━━━━━━━━━━━━━━━\n\n"
-        f"👥 Юзеров: <b>{total}</b>\n"
-        f"💎 Купили: <b>{prem_count}</b>\n"
-        f"🎁 Триал: <b>{trial_users}</b>\n"
-        f"💰 Доход: <b>{prem_count * 250} ⭐</b>\n"
-        f"🛠 Тех. работы: <b>{maint_status}</b>\n\n"
-        f"📡 <b>Каналы в парсере:</b>\n<code>{ch_list}</code>\n\n"
-        "<i>Выбери действие на панели ниже:</i>"
-    )
-    await safe_edit(cb.message, text, get_admin_menu())
+        text = (
+            f"🛠 <b>Пульт управления</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n\n"
+            f"👥 Юзеров: <b>{total}</b>\n"
+            f"💎 Купили: <b>{prem_count}</b>\n"
+            f"🎁 Триал: <b>{trial_users}</b>\n"
+            f"💰 Доход: <b>{prem_count * 250} ⭐</b>\n"
+            f"🛠 Тех. работы: <b>{maint_status}</b>\n\n"
+            f"📡 <b>Каналы в парсере:</b>\n<code>{ch_list}</code>\n\n"
+            "<i>Выбери действие на панели ниже:</i>"
+        )
+        await safe_edit(cb.message, text, get_admin_menu())
+    except Exception as e:
+        log.error(f"Error rendering admin panel: {e}")
+        await safe_edit(cb.message, "⚠️ Ошибка базы данных. Попробуйте позже.", get_admin_menu())
 
 async def render_job(cb: CallbackQuery, index: int):
     if not await check_sub(cb.from_user.id):
@@ -383,7 +413,7 @@ async def render_job(cb: CallbackQuery, index: int):
         if user_filter:
             jobs = [j for j in jobs if user_filter.lower() in j['text'].lower()]
 
-    limit = 10 if is_prem else 3
+    limit = 30 if is_prem else 3
     jobs = jobs[:limit]
     
     if not jobs:
@@ -468,6 +498,7 @@ async def start(message: Message, state: FSMContext):
     await state.clear()
     uid = message.from_user.id
     is_admin = str(uid) == ADMIN_ID
+    user_name = message.from_user.first_name or "User"
     
     if not await check_sub(uid):
         await message.answer("👋 <b>Привет!</b>\n\nЧтобы пользоваться ботом, подпишись на наш канал с вакансиями.", reply_markup=get_sub_menu())
@@ -478,7 +509,7 @@ async def start(message: Message, state: FSMContext):
         await add_premium_days(uid, 3)
         if not is_admin:
             try:
-                name = escape(message.from_user.first_name)
+                name = escape(user_name)
                 await bot.send_message(ADMIN_ID, f"👤 <b>Новый юзер</b>\n{name}\nID: <code>{uid}</code>\n🎁 Триал 3 дня.")
             except Exception: pass
             
@@ -486,11 +517,11 @@ async def start(message: Message, state: FSMContext):
     if len(parts) > 1 and parts[1].startswith("ref_"):
         raw = parts[1][4:]
         if raw.isdigit() and await apply_referral(int(raw), uid):
-            try: await bot.send_message(int(raw), f"🎁 По твоей ссылке перешёл {escape(message.from_user.first_name)}! +7 дней.")
+            try: await bot.send_message(int(raw), f"🎁 По твоей ссылке перешёл {escape(user_name)}! +7 дней.")
             except Exception: pass
             
     await message.answer(
-        f"👋 <b>Привет, {escape(message.from_user.first_name)}!</b>\n\n"
+        f"👋 <b>Привет, {escape(user_name)}!</b>\n\n"
         "🚀 <b>Gig Sniper</b> — твой радар IT-заказов из Telegram.\n\n"
         "🎁 Тебе активирован <b>3-дневный Премиум</b>.\n\n"
         "<i>Совет: напиши @этот_бот в любом чате, чтобы искать вакансии без входа в бота.</i>",
@@ -517,9 +548,11 @@ async def back_to_menu(cb: CallbackQuery, state: FSMContext):
 async def reset_filter_from_menu(cb: CallbackQuery, state: FSMContext):
     await cb.answer("✅ Фильтр сброшен. Показываю все вакансии.", show_alert=True)
     await state.clear()
-    p = await get_pool()
-    async with p.acquire() as c:
-        await c.execute("UPDATE users SET filter_word = NULL WHERE user_id = $1", cb.from_user.id)
+    try:
+        p = await get_pool()
+        async with p.acquire() as c:
+            await c.execute("UPDATE users SET filter_word = NULL WHERE user_id = $1", cb.from_user.id)
+    except Exception: pass
         
     await safe_edit(cb.message, "⚡️ <b>Главное меню:</b>\n\n<i>Фильтр успешно сброшен.</i>", await build_main_menu(cb.from_user.id, str(cb.from_user.id) == ADMIN_ID))
 
@@ -527,7 +560,11 @@ async def reset_filter_from_menu(cb: CallbackQuery, state: FSMContext):
 async def show_jobs(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
     await state.clear()
-    index = int(cb.data.split(":")[1])
+    try:
+        index = int(cb.data.split(":")[1])
+    except (ValueError, IndexError):
+        index = 0
+        
     if index == 0 and not cb.message.text.startswith("💼"):
         await safe_edit(cb.message, "🔄 <i>Сканирую каналы...</i>")
     await render_job(cb, index)
@@ -571,9 +608,12 @@ async def set_filter(message: Message, state: FSMContext):
     if word == "-" or word == "":
         word = None
         
-    p = await get_pool()
-    async with p.acquire() as c:
-        await c.execute("UPDATE users SET filter_word = $1 WHERE user_id = $2", word, message.from_user.id)
+    try:
+        p = await get_pool()
+        async with p.acquire() as c:
+            await c.execute("UPDATE users SET filter_word = $1 WHERE user_id = $2", word, message.from_user.id)
+    except Exception as e:
+        log.error(f"Error setting filter: {e}")
         
     await state.clear()
     
@@ -607,7 +647,7 @@ async def on_paid(message: Message):
         async with p.acquire() as c: 
             await c.execute("UPDATE users SET is_paid = TRUE WHERE user_id = $1", message.from_user.id)
             
-        name = escape(message.from_user.first_name)
+        name = escape(message.from_user.first_name or "User")
         if message.from_user.username: name += f" (@{message.from_user.username})"
             
         await bot.send_message(
@@ -674,9 +714,11 @@ async def toggle_maint(cb: CallbackQuery, state: FSMContext):
     IS_MAINTENANCE = not IS_MAINTENANCE
     val = '1' if IS_MAINTENANCE else '0'
     
-    p = await get_pool()
-    async with p.acquire() as c:
-        await c.execute("UPDATE settings SET value = $1 WHERE key = 'maintenance'", val)
+    try:
+        p = await get_pool()
+        async with p.acquire() as c:
+            await c.execute("UPDATE settings SET value = $1 WHERE key = 'maintenance'", val)
+    except Exception: pass
         
     status_text = "ВКЛЮЧЕНЫ (доступ только у тебя)" if IS_MAINTENANCE else "ВЫКЛЮЧЕНЫ (бот работает для всех)"
     await cb.answer(f"Тех. работы {status_text}", show_alert=True)
@@ -730,23 +772,31 @@ async def admin_give_days_finish(message: Message, state: FSMContext):
         await state.clear()
         return
     
-    await add_premium_days(target_uid, days)
-    await state.clear()
+    try:
+        await add_premium_days(target_uid, days)
+        await message.answer(
+            f"✅ <b>Успешно!</b>\nВыдано {days} дней юзеру <code>{target_uid}</code>.",
+            reply_markup=get_admin_menu()
+        )
+    except Exception as e:
+        await message.answer(f"❌ Ошибка базы: {e}", reply_markup=get_admin_menu())
     
-    await message.answer(
-        f"✅ <b>Успешно!</b>\nВыдано {days} дней юзеру <code>{target_uid}</code>.",
-        reply_markup=get_admin_menu()
-    )
+    await state.clear()
 
 @dp.callback_query(F.data == "admin_clear")
 async def admin_clear_fakes(cb: CallbackQuery, state: FSMContext):
     if str(cb.from_user.id) != ADMIN_ID:
         await cb.answer("У вас нет доступа.", show_alert=True)
         return
+    
     await cb.answer("🧹 Все неоплаченные подписки сброшены!", show_alert=True)
-    p = await get_pool()
-    async with p.acquire() as c: 
-        await c.execute("UPDATE users SET premium_until = NOW(), filter_word = NULL WHERE is_paid = FALSE")
+    try:
+        p = await get_pool()
+        async with p.acquire() as c: 
+            await c.execute("UPDATE users SET premium_until = NOW(), filter_word = NULL WHERE is_paid = FALSE")
+    except Exception as e:
+        log.error(f"Clear fakes error: {e}")
+        
     await render_admin_panel(cb, state)
 
 @dp.callback_query(F.data == "admin_add_ch")
@@ -773,15 +823,21 @@ async def admin_add_ch_finish(message: Message, state: FSMContext):
         
     clean_name = message.text.replace("https://t.me/", "").replace("@", "").strip()[:100]
     
-    p = await get_pool()
-    async with p.acquire() as c:
-        try:
+    if not clean_name:
+        await message.answer("❌ Имя канала не может быть пустым. Отправь еще раз:", reply_markup=get_cancel_menu())
+        return
+        
+    try:
+        p = await get_pool()
+        async with p.acquire() as c:
             await c.execute("INSERT INTO channels (name) VALUES ($1)", clean_name)
             _feed["data"] = None
             await state.clear()
             await message.answer(f"✅ Канал <b>@{clean_name}</b> добавлен в парсер.", reply_markup=get_admin_menu())
-        except asyncpg.exceptions.UniqueViolationError:
-            await message.answer(f"⚠️ Канал <b>@{clean_name}</b> уже есть в списке.", reply_markup=get_admin_menu())
+    except asyncpg.exceptions.UniqueViolationError:
+        await message.answer(f"⚠️ Канал <b>@{clean_name}</b> уже есть в списке.", reply_markup=get_admin_menu())
+    except Exception as e:
+        await message.answer(f"❌ Ошибка базы: {e}", reply_markup=get_admin_menu())
 
 @dp.callback_query(F.data == "admin_del_ch")
 async def admin_del_ch_start(cb: CallbackQuery, state: FSMContext):
@@ -807,15 +863,22 @@ async def admin_del_ch_finish(message: Message, state: FSMContext):
         
     clean_name = message.text.replace("https://t.me/", "").replace("@", "").strip()
     
-    p = await get_pool()
-    async with p.acquire() as c:
-        result = await c.execute("DELETE FROM channels WHERE name = $1", clean_name)
-        if result == "DELETE 1":
-            _feed["data"] = None
-            await state.clear()
-            await message.answer(f"🗑 Канал <b>@{clean_name}</b> удален.", reply_markup=get_admin_menu())
-        else:
-            await message.answer(f"❌ Канал <b>@{clean_name}</b> не найден.", reply_markup=get_admin_menu())
+    if not clean_name:
+        await message.answer("❌ Имя канала не может быть пустым. Отправь еще раз:", reply_markup=get_cancel_menu())
+        return
+        
+    try:
+        p = await get_pool()
+        async with p.acquire() as c:
+            result = await c.execute("DELETE FROM channels WHERE name = $1", clean_name)
+            if result == "DELETE 1":
+                _feed["data"] = None
+                await state.clear()
+                await message.answer(f"🗑 Канал <b>@{clean_name}</b> удален.", reply_markup=get_admin_menu())
+            else:
+                await message.answer(f"❌ Канал <b>@{clean_name}</b> не найден.", reply_markup=get_admin_menu())
+    except Exception as e:
+        await message.answer(f"❌ Ошибка базы: {e}", reply_markup=get_admin_menu())
 
 # ---------- Запуск ----------
 async def main():
