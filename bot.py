@@ -1,7 +1,9 @@
 # language: Python 3.11, file: bot.py
+# pip install aiogram==3.20.0 asyncpg==0.30.0 aiohttp==3.11.0 flask==3.1.2 beautifulsoup4==4.12.3
+
 import os
 import time
-import json
+import re
 import asyncio
 import logging
 from threading import Thread
@@ -9,6 +11,7 @@ from html import escape
 
 import aiohttp
 import asyncpg
+from bs4 import BeautifulSoup
 from flask import Flask
 from aiogram import Bot, Dispatcher, F, BaseMiddleware
 from aiogram.types import (
@@ -25,7 +28,6 @@ log = logging.getLogger("bot")
 
 TOKEN = os.environ.get("BOT_TOKEN")
 DATABASE_URL = os.environ.get("DATABASE_URL")
-FEED_URL = "https://raw.githubusercontent.com/brawle345-beep/gig-sniper/main/feed.json"
 
 ADMIN_ID = "7183342708"
 MAINTENANCE_MODE = False
@@ -96,26 +98,72 @@ async def apply_referral(ref_id: int, new_uid: int) -> bool:
             """, ref_id)
             return True
 
-# ---------- Лента ----------
+# ---------- Парсер Телеграм-каналов ----------
+# ВПИШИ СЮДА НУЖНЫЕ ПУБЛИЧНЫЕ КАНАЛЫ (без @)
+TARGET_CHANNELS = [
+    "it_vakansii",
+    "forpythonjobs",
+    "javascript_jobs",
+]
+
+# Слова, по которым бот будет отсеивать мусор (оставит только эти темы)
+KEYWORDS = ["python", "react", "frontend", "backend", "разработчик", "верстальщик", "удаленка", "вакансия", "ищу"]
+
 _feed = {"data": None, "ts": 0.0}
 
 async def fetch_feed() -> list:
     now = time.time()
-    if _feed["data"] is not None and now - _feed["ts"] < 30:
+    if _feed["data"] is not None and now - _feed["ts"] < 300: # Кеш на 5 минут
         return _feed["data"]
-    try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as s:
-            async with s.get(FEED_URL) as r:
-                if r.status != 200: return _feed["data"] or []
-                raw_text = await r.text()
-                data = json.loads(raw_text)
-                if isinstance(data, dict): data = data.get("jobs", [])
-                _feed["data"] = data
-                _feed["ts"] = now
-                return data
-    except Exception as e:
-        log.warning("feed: %s", e)
-        return _feed["data"] or []
+        
+    jobs = []
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    
+    async with aiohttp.ClientSession(headers=headers) as session:
+        for channel in TARGET_CHANNELS:
+            url = f"https://t.me/s/{channel}"
+            try:
+                async with session.get(url, timeout=10) as r:
+                    if r.status != 200:
+                        continue
+                    html = await r.text()
+                    soup = BeautifulSoup(html, 'html.parser')
+                    
+                    messages = soup.find_all('div', class_='tgme_widget_message_wrap')
+                    
+                    for msg in messages:
+                        text_div = msg.find('div', class_='tgme_widget_message_text')
+                        if not text_div:
+                            continue
+                            
+                        text = text_div.get_text(separator='\n').strip()
+                        
+                        # Фильтр по ключевым словам
+                        if not any(kw.lower() in text.lower() for kw in KEYWORDS):
+                            continue
+                            
+                        # Ищем ссылку на юзера для связи
+                        match = re.search(r'(?:@|t\.me/)([a-zA-Z0-9_]{5,32})', text)
+                        contact_url = f"https://t.me/{match.group(1)}" if match else None
+                        
+                        # Достаем ссылку на сам пост в канале
+                        link_div = msg.find('a', class_='tgme_widget_message_date')
+                        post_url = link_div['href'] if link_div else url
+                        
+                        jobs.append({
+                            "text": text[:800] + "..." if len(text) > 800 else text,
+                            "contact_url": contact_url,
+                            "post_url": post_url
+                        })
+            except Exception as e:
+                log.warning(f"Ошибка парсинга {channel}: {e}")
+                
+    jobs = jobs[-20:]
+    jobs.reverse() 
+    
+    _feed["data"] = jobs
+    _feed["ts"] = now
+    return jobs
 
 # ---------- Flask (Render keepalive) ----------
 app = Flask(__name__)
@@ -169,12 +217,12 @@ async def start(message: Message):
 
     until = await get_premium_until(uid)
     if until is None:
-        await add_premium_days(uid, 0)
+        await add_premium_days(uid, 3)
         if not is_admin:
             try:
                 name = escape(message.from_user.first_name)
                 if message.from_user.username: name += f" (@{message.from_user.username})"
-                await bot.send_message(ADMIN_ID, f"👤 <b>Новый юзер</b>\n{name}\nID: <code>{uid}</code>")
+                await bot.send_message(ADMIN_ID, f"👤 <b>Новый юзер (3 дня триала)</b>\n{name}\nID: <code>{uid}</code>")
             except Exception: pass
 
     parts = message.text.split()
@@ -188,8 +236,9 @@ async def start(message: Message):
     await message.answer(
         f"👋 <b>Привет, {escape(message.from_user.first_name)}!</b>\n\n"
         "🤖 Это <b>Gig Sniper</b> — радар свежих IT-вакансий и заказов.\n\n"
-        "<blockquote>Сканируем биржи и Telegram-каналы каждые 10 минут, отсеиваем шлак, "
-        "присылаем только актуальное в долларах и рублях.</blockquote>\n\n"
+        "<blockquote>Сканируем Telegram-каналы каждые 5 минут, отсеиваем шлак, "
+        "присылаем только актуальное.</blockquote>\n\n"
+        "🎁 <b>Тебе активирован 3-дневный Премиум-доступ!</b>\n"
         "⚡️ <b>Выбери действие:</b>",
         reply_markup=get_main_menu(is_admin),
     )
@@ -207,14 +256,25 @@ async def show_jobs(cb: CallbackQuery):
 
     is_prem = await has_premium(cb.from_user.id)
     limit = 10 if is_prem else 3
-    text = "🔥 <b>Свежие вакансии:</b>\n\n"
-    for j in jobs[:limit]:
-        text += (f"▪️ <a href='{j.get('url','')}'>{j.get('title','Без названия')}</a>\n"
-                 f"🏢 {j.get('company','Не указана')}\n\n")
-    if not is_prem:
-        text += f"🔒 <i>Показано {limit} из {len(jobs)}.</i>\n💎 Купи Премиум для полного списка."
+    
+    # Меняем сообщение "Загружаю..." на заголовок
+    await safe_edit(cb.message, f"🔥 <b>Свежие вакансии (показано {min(limit, len(jobs))}):</b>", reply_markup=get_main_menu(is_admin))
 
-    await safe_edit(cb.message, text, reply_markup=get_main_menu(is_admin))
+    # Отправляем каждую вакансию отдельным сообщением с кнопками
+    for j in jobs[:limit]:
+        buttons = []
+        if j.get('contact_url'):
+            buttons.append([InlineKeyboardButton(text="💬 Написать заказчику", url=j['contact_url'])])
+        if j.get('post_url'):
+            buttons.append([InlineKeyboardButton(text="🔗 Открыть пост", url=j['post_url'])])
+            
+        kb = InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
+        
+        await cb.message.answer(j['text'], reply_markup=kb, disable_web_page_preview=True)
+        
+    if not is_prem and len(jobs) > 3:
+        await cb.message.answer("🔒 <i>Показано 3 вакансии из базы.</i>\n💎 Купи Премиум для полного доступа.", reply_markup=get_main_menu(is_admin))
+    
     await cb.answer()
 
 @dp.callback_query(F.data == "buy_premium")
