@@ -1,5 +1,29 @@
 [
  {
+  "title": "#middle",
+  "company": "Telegram",
+  "source": "TG: @job_python",
+  "url": "https://t.me/job_python/8076",
+  "salary_min": null,
+  "salary_max": null
+ },
+ {
+  "title": "LEAD BACKEND DEVELOPER | REMOTE GLOBAL | FINTECH",
+  "company": "Telegram",
+  "source": "TG: @Remoteit",
+  "url": "https://t.me/Remoteit/14109",
+  "salary_min": null,
+  "salary_max": null
+ },
+ {
+  "title": "LEAD PYTHON DEVELOPER | REMOTE RU | ТЕХНОФАКТУРА",
+  "company": "Telegram",
+  "source": "TG: @Remoteit",
+  "url": "https://t.me/Remoteit/14111",
+  "salary_min": null,
+  "salary_max": null
+ },
+ {
   "title": "Dual WordPress-Analytics Resume -- 2",
   "company": "",
   "source": "freelancer",
@@ -30,14 +54,6 @@
   "url": "https://www.freelancer.com/projects/javascript/react-material-for-small-backend-40797802",
   "salary_min": 10,
   "salary_max": 30
- },
- {
-  "title": "High-Accuracy Quotex Trading Bot",
-  "company": "",
-  "source": "freelancer",
-  "url": "https://www.freelancer.com/projects/api/High-Accuracy-Quotex-Trading-Bot",
-  "salary_min": 1500,
-  "salary_max": 12500
  },
  {
   "title": "React native stripe implementation - Quotation Request",
@@ -112,6 +128,14 @@
   "salary_max": 750
  },
  {
+  "title": "High-Accuracy Quotex Trading Bot",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/api/High-Accuracy-Quotex-Trading-Bot",
+  "salary_min": 1500,
+  "salary_max": 12500
+ },
+ {
   "title": "Lottery Data Analysis",
   "company": "",
   "source": "freelancer",
@@ -152,91 +176,67 @@
   "salary_max": 750
  },
  {
-  "title": "Physics Lab Data Analysis",
+  "title": "Automated Dropshipping Amazon Store Setup",
   "company": "",
   "source": "freelancer",
-  "url": "https://www.freelancer.com/projects/mathematics/Physics-Lab-Data-Analysis",
-  "salary_min": 30,
-  "salary_max": 250
- },
- {
-  "title": "Beginner Python ML Score Predictor",
-  "company": "",
-  "source": "freelancer",
-  "url": "https://www.freelancer.com/projects/data-analysis/Beginner-Python-Score-Predictor",
-  "salary_min": 12500,
-  "salary_max": 37500
- },
- {
-  "title": "Crypto Quant Researcher – Proven Pump/Dump & Pre-Breakout Strategy | Existing Bybit Bot",
-  "company": "",
-  "source": "freelancer",
-  "url": "https://www.freelancer.com/projects/python/Crypto-Quant-Researcher-Proven-Pump",
-  "salary_min": 750,
-  "salary_max": 1500
- },
- {
-  "title": "Hindi English AI Dataset",
-  "company": "",
-  "source": "freelancer",
-  "url": "https://www.freelancer.com/projects/data-annotation/Hindi-English-Dataset",
-  "salary_min": 750,
-  "salary_max": 1250
- },
- {
-  "title": "Jitsi / WebRTC Engineer: Customize Jitsi Meet with Auto-Recording & Live Observer Portal -- 3",
-  "company": "",
-  "source": "freelancer",
-  "url": "https://www.freelancer.com/projects/jitsi/Jitsi-WebRTC-Engineer-Customize-Jitsi-40796475",
-  "salary_min": 30,
-  "salary_max": 250
- },
- {
-  "title": "Excel Data Cleaning & Charts",
-  "company": "",
-  "source": "freelancer",
-  "url": "https://www.freelancer.com/projects/data-visualization/Excel-Data-Cleaning-Charts",
-  "salary_min": 750,
-  "salary_max": 1250
- },
- {
-  "title": "Build Printing Production Monitoring Dashboard",
-  "company": "",
-  "source": "freelancer",
-  "url": "https://www.freelancer.com/projects/fastapi/Build-Printing-Production-Monitoring",
-  "salary_min": 12500,
-  "salary_max": 37500
- },
- {
-  "title": "Smart Canteen System Source Code",
-  "company": "",
-  "source": "freelancer",
-  "url": "https://www.freelancer.com/projects/flask/Smart-Canteen-System-Source-Code",
-  "salary_min": 12500,
-  "salary_max": 37500
- },
- {
-  "title": "Open-Source LLM Deployment Specialist",
-  "company": "",
-  "source": "freelancer",
-  "url": "https://www.freelancer.com/projects/ollama/Open-Source-LLM-Deployment-Specialist",
-  "salary_min": 75000,
-  "salary_max": 150000
- },
- {
-  "title": "Desktop CSV-to-Excel Converter",
-  "company": "",
-  "source": "freelancer",
-  "url": "https://www.freelancer.com/projects/pandas/Desktop-CSV-Excel-Converter",
-  "salary_min": 30,
-  "salary_max": 250
- },
- {
-  "title": "AI Chatbot & Automation Developer – Facebook, TikTok, n8n, Google Forms",
-  "company": "",
-  "source": "freelancer",
-  "url": "https://www.freelancer.com/projects/ai-chatbot/Chatbot-Automation-Developer-Facebook",
+  "url": "https://www.freelancer.com/projects/amazon/Automated-Dropshipping-Amazon-Store",
   "salary_min": 250,
   "salary_max": 750
+ },
+ {
+  "title": "WhatsApp to Drive Backup Automation",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/python/WhatsApp-Drive-Backup-Automation",
+  "salary_min": 1500,
+  "salary_max": 12500
+ },
+ {
+  "title": "Task Automation Selenium/Cloud based web app - Quotation Request",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/javascript/Task-Automation-Selenium-Cloud-based-40797782",
+  "salary_min": 12500,
+  "salary_max": 37500
+ },
+ {
+  "title": "Build Collaborative Grok AI Organization",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/ai-agents/Build-Collaborative-Grok-Organization",
+  "salary_min": 50,
+  "salary_max": null
+ },
+ {
+  "title": "Windows RAM Automation in C#",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/cplusplus-programming/Windows-RAM-Automation",
+  "salary_min": 30,
+  "salary_max": 250
+ },
+ {
+  "title": "Commission-Based Business Development & Lead Generation Specialist",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/lead-generation/Commission-Based-Business-Development-40797434",
+  "salary_min": 250,
+  "salary_max": 750
+ },
+ {
+  "title": "Setter de Ventas Español Nativo",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/sales/Setter-Ventas-Espa-Nativo",
+  "salary_min": 250,
+  "salary_max": 750
+ },
+ {
+  "title": "Automate Website Click Sequences",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/automation/Automate-Website-Click-Sequences",
+  "salary_min": 150000,
+  "salary_max": 250000
  }
 ]
