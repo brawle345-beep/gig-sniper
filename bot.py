@@ -98,11 +98,13 @@ async def apply_referral(ref_id: int, new_uid: int) -> bool:
             """, ref_id)
             return True
 
-# ---------- Красивый парсер Телеграм-каналов ----------
+# ---------- Парсер Телеграм-каналов ----------
+# Актуальные публичные каналы с открытой веб-версией
 TARGET_CHANNELS = [
-    "it_vakansii",
-    "forpythonjobs",
-    "javascript_jobs",
+    "it_vakansii_jobs",
+    "remote_it_jobs",
+    "python_jobs",
+    "golang_jobs",
 ]
 
 KEYWORDS = ["python", "react", "frontend", "backend", "разработчик", "верстальщик", "удаленка", "вакансия", "ищу"]
@@ -110,22 +112,13 @@ KEYWORDS = ["python", "react", "frontend", "backend", "разработчик", 
 _feed = {"data": None, "ts": 0.0}
 
 def format_vacancy(text: str) -> str:
-    """Очищает и красиво оформляет текст вакансии."""
-    # Убираем лишние пробелы и пустые строки
     text = re.sub(r'\n{3,}', '\n\n', text.strip())
-    
-    # Делаем первую строку (обычно заголовок) жирной
     lines = text.split('\n')
     if lines:
         lines[0] = f"<b>{lines[0]}</b>"
-    
     text = '\n'.join(lines)
-    
-    # Если текст слишком длинный, обрезаем и прячем в спойлер для компактности
     if len(text) > 400:
-        # Берем первые 400 символов для превью
         preview = text[:400].rsplit(' ', 1)[0] + "..."
-        # Остальное прячем в спойлер
         remainder = text[400:]
         return f"{preview}\n\n<tg-spoiler>{remainder}</tg-spoiler>"
     return text
@@ -134,10 +127,8 @@ async def fetch_feed() -> list:
     now = time.time()
     if _feed["data"] is not None and now - _feed["ts"] < 300:
         return _feed["data"]
-        
     jobs = []
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    
     async with aiohttp.ClientSession(headers=headers) as session:
         for channel in TARGET_CHANNELS:
             url = f"https://t.me/s/{channel}"
@@ -147,31 +138,20 @@ async def fetch_feed() -> list:
                     html = await r.text()
                     soup = BeautifulSoup(html, 'html.parser')
                     messages = soup.find_all('div', class_='tgme_widget_message_wrap')
-                    
                     for msg in messages:
                         text_div = msg.find('div', class_='tgme_widget_message_text')
                         if not text_div: continue
-                            
                         text = text_div.get_text(separator='\n').strip()
                         if not any(kw.lower() in text.lower() for kw in KEYWORDS): continue
-                        
                         match = re.search(r'(?:@|t\.me/)([a-zA-Z0-9_]{5,32})', text)
                         contact_url = f"https://t.me/{match.group(1)}" if match else None
-                        
                         link_div = msg.find('a', class_='tgme_widget_message_date')
                         post_url = link_div['href'] if link_div else url
-                        
-                        jobs.append({
-                            "text": text,
-                            "contact_url": contact_url,
-                            "post_url": post_url,
-                            "channel": channel
-                        })
+                        jobs.append({"text": text, "contact_url": contact_url, "post_url": post_url, "channel": channel})
             except Exception as e:
                 log.warning(f"Ошибка парсинга {channel}: {e}")
-                
     jobs = jobs[-20:]
-    jobs.reverse() 
+    jobs.reverse()
     _feed["data"] = jobs
     _feed["ts"] = now
     return jobs
@@ -224,7 +204,6 @@ async def safe_edit(message: Message, text: str, reply_markup=None):
 async def start(message: Message):
     uid = message.from_user.id
     is_admin = str(uid) == ADMIN_ID
-
     until = await get_premium_until(uid)
     if until is None:
         await add_premium_days(uid, 3)
@@ -234,7 +213,6 @@ async def start(message: Message):
                 if message.from_user.username: name += f" (@{message.from_user.username})"
                 await bot.send_message(ADMIN_ID, f"👤 <b>Новый юзер</b>\n{name}\nID: <code>{uid}</code>\n🎁 Триал 3 дня.")
             except Exception: pass
-
     parts = message.text.split()
     if len(parts) > 1 and parts[1].startswith("ref_"):
         raw = parts[1][4:]
@@ -242,7 +220,6 @@ async def start(message: Message):
             try:
                 await bot.send_message(int(raw), f"🎁 По твоей ссылке перешёл {escape(message.from_user.first_name)}! +7 дней.")
             except Exception: pass
-
     await message.answer(
         f"👋 <b>Привет, {escape(message.from_user.first_name)}!</b>\n\n"
         "<blockquote>🚀 <b>Gig Sniper</b> — твой карманный радар IT-заказов. "
@@ -256,52 +233,35 @@ async def show_jobs(cb: CallbackQuery):
     await safe_edit(cb.message, "🔄 <i>Сканирую каналы...</i>")
     jobs = await fetch_feed()
     is_admin = str(cb.from_user.id) == ADMIN_ID
-
     if not jobs:
         await safe_edit(cb.message, "😴 Пока новых вакансий нет. Загляни позже!", reply_markup=get_main_menu(is_admin))
         await cb.answer()
         return
-
     is_prem = await has_premium(cb.from_user.id)
     limit = 10 if is_prem else 3
-    
-    # Красивый заголовок
     header = (
         "✨ <b>СВЕЖИЕ ВАКАНСИИ</b> ✨\n"
         f"<i>Найдено {len(jobs)} актуальных предложений</i>\n"
         "━━━━━━━━━━━━━━━━━━"
     )
     await safe_edit(cb.message, header, reply_markup=get_main_menu(is_admin))
-
-    # Отправляем карточки
     for i, j in enumerate(jobs[:limit], 1):
         buttons = []
         if j.get('contact_url'):
             buttons.append([InlineKeyboardButton(text="💬 Написать заказчику", url=j['contact_url'])])
         if j.get('post_url'):
             buttons.append([InlineKeyboardButton(text="🔗 Оригинал в TG", url=j['post_url'])])
-            
         kb = InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
-        
-        # Форматируем текст
         clean_text = format_vacancy(j['text'])
-        
-        # Собираем карточку
-        card = (
-            f"<b>#{i} | Из канала @{j['channel']}</b>\n\n"
-            f"{clean_text}"
-        )
-        
+        card = f"<b>#{i} | Из канала @{j['channel']}</b>\n\n{clean_text}"
         await cb.message.answer(card, reply_markup=kb, disable_web_page_preview=True)
-        await asyncio.sleep(0.3) # Микро-пауза, чтобы Телеграм не забанил за спам
-        
+        await asyncio.sleep(0.3)
     if not is_prem and len(jobs) > 3:
         await cb.message.answer(
             f"🔒 <i>Показано 3 из {len(jobs)}.</i>\n\n"
             "💎 <b>Оформи Премиум</b>, чтобы видеть весь поток заказов без ограничений.",
             reply_markup=get_main_menu(is_admin)
         )
-    
     await cb.answer()
 
 @dp.callback_query(F.data == "buy_premium")
@@ -331,7 +291,6 @@ async def on_paid(message: Message):
         if message.from_user.username: name += f" (@{message.from_user.username})"
         await bot.send_message(ADMIN_ID, f"💰 <b>Новая оплата!</b>\nЮзер: {name}\nID: <code>{message.from_user.id}</code>")
     except Exception as e: log.error("Ошибка: %s", e)
-        
     await message.answer("✅ <b>Оплата прошла!</b>\nДоступ на 30 дней открыт. Приятной охоты!", reply_markup=get_main_menu(str(message.from_user.id) == ADMIN_ID))
 
 @dp.callback_query(F.data == "invite")
@@ -368,14 +327,12 @@ async def admin_panel(cb: CallbackQuery):
     async with p.acquire() as c:
         total = await c.fetchval("SELECT COUNT(*) FROM users")
         premium_users = await c.fetch("SELECT user_id, premium_until FROM users WHERE premium_until > NOW()")
-    
     prem_count = len(premium_users)
     prem_list = ""
     for u in premium_users:
         if str(u['user_id']) == ADMIN_ID: continue
         until_str = u['premium_until'].strftime("%d.%m.%Y")
         prem_list += f"🔹 <code>{u['user_id']}</code> — до {until_str}\n"
-
     text = (
         f"🛠 <b>Админ-панель</b>\n\n"
         f"👥 Юзеров: <b>{total}</b>\n"
@@ -384,7 +341,6 @@ async def admin_panel(cb: CallbackQuery):
     )
     if prem_list: text += f"<b>Список купивших (ID):</b>\n{prem_list}"
     else: text += "<i>Пока никто не купил.</i>"
-
     await safe_edit(cb.message, text, reply_markup=get_main_menu(True))
     await cb.answer()
 
