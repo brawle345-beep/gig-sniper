@@ -1,5 +1,21 @@
 [
  {
+  "title": "Dual WordPress-Analytics Resume -- 2",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/powerpoint/Dual-WordPress-Analytics-Resume",
+  "salary_min": 100,
+  "salary_max": 400
+ },
+ {
+  "title": "WhatsApp to Drive Backup Automation",
+  "company": "",
+  "source": "freelancer",
+  "url": "https://www.freelancer.com/projects/python/WhatsApp-Drive-Backup-Automation",
+  "salary_min": 1500,
+  "salary_max": 12500
+ },
+ {
   "title": "Python 3D Volume-Packing Optimizer - Quotation Request",
   "company": "",
   "source": "freelancer",
@@ -222,21 +238,5 @@
   "url": "https://www.freelancer.com/projects/ai-chatbot/Chatbot-Automation-Developer-Facebook",
   "salary_min": 250,
   "salary_max": 750
- },
- {
-  "title": "Real-Time Chat API Backend",
-  "company": "",
-  "source": "freelancer",
-  "url": "https://www.freelancer.com/projects/backend-development/Real-Time-Chat-API-Backend",
-  "salary_min": 250,
-  "salary_max": 750
- },
- {
-  "title": "AI-Powered Stock Market Analytics & Prediction Application",
-  "company": "",
-  "source": "freelancer",
-  "url": "https://www.freelancer.com/projects/php/Powered-Stock-Market-Analytics",
-  "salary_min": 6000,
-  "salary_max": 6001
  }
 ]
