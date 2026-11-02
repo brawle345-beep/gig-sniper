@@ -117,7 +117,6 @@ async def fetch_feed() -> list:
                 raw_text = await r.text()
                 data = json.loads(raw_text)
                 
-                # Защита, если внутри файла словарь {"jobs": [...]}, а не сразу список
                 if isinstance(data, dict):
                     data = data.get("jobs", [])
                     
@@ -257,9 +256,21 @@ async def pre_checkout(q: PreCheckoutQuery):
 
 @dp.message(F.successful_payment)
 async def on_paid(message: Message):
+    log.info("Получена оплата! Payload: %s, Юзер: %s", 
+             message.successful_payment.invoice_payload, message.from_user.id)
+             
     if message.successful_payment.invoice_payload != "premium_30":
+        log.warning("Payload не совпал!")
         return
-    await add_premium_days(message.from_user.id, 30)
+        
+    try:
+        await add_premium_days(message.from_user.id, 30)
+        log.info("Премиум успешно начислен для %s", message.from_user.id)
+        
+        await bot.send_message(ADMIN_ID, f"💰 <b>Новая оплата!</b>\nЮзер: {escape(message.from_user.first_name)}\nID: <code>{message.from_user.id}</code>")
+    except Exception as e:
+        log.error("Ошибка при начислении премиума: %s", e)
+        
     await message.answer("✅ <b>Оплата прошла!</b> Доступ на 30 дней открыт.",
                          reply_markup=get_main_menu(str(message.from_user.id) == ADMIN_ID))
 
@@ -295,19 +306,50 @@ async def admin_panel(cb: CallbackQuery):
     p = await get_pool()
     async with p.acquire() as c:
         total = await c.fetchval("SELECT COUNT(*) FROM users")
-        premium = await c.fetchval("SELECT COUNT(*) FROM users WHERE premium_until > NOW()")
-    await safe_edit(cb.message,
-        f"🛠 <b>Админ-панель</b>\n\n👥 Юзеров: <b>{total}</b>\n"
-        f"💎 Активных подписок: <b>{premium}</b>\n💰 Доход: <b>{premium * 250} ⭐</b>",
-        reply_markup=get_main_menu(True))
+        premium_users = await c.fetch("SELECT user_id, premium_until FROM users WHERE premium_until > NOW()")
+    
+    prem_count = len(premium_users)
+    prem_list = ""
+    
+    for u in premium_users:
+        if str(u['user_id']) == ADMIN_ID: 
+            continue
+        until_str = u['premium_until'].strftime("%d.%m.%Y")
+        prem_list += f"🔹 <code>{u['user_id']}</code> — до {until_str}\n"
+
+    text = (
+        f"🛠 <b>Админ-панель</b>\n\n"
+        f"👥 Юзеров: <b>{total}</b>\n"
+        f"💎 Активных подписок: <b>{prem_count}</b>\n"
+        f"💰 Доход: <b>{prem_count * 250} ⭐</b>\n\n"
+    )
+    
+    if prem_list:
+        text += f"<b>Список купивших (ID):</b>\n{prem_list}"
+    else:
+        text += "<i>Пока никто не купил.</i>"
+
+    await safe_edit(cb.message, text, reply_markup=get_main_menu(True))
     await cb.answer()
+
+@dp.message(F.text.startswith("/give "))
+async def give_premium(message: Message):
+    if str(message.from_user.id) != ADMIN_ID:
+        return
+    try:
+        _, uid, days = message.text.split()
+        await add_premium_days(int(uid), int(days))
+        await message.answer(f"✅ Выдал {days} дней юзеру <code>{uid}</code>")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}\nФормат: <code>/give 123456789 30</code>")
 
 # ---------- Запуск ----------
 async def main():
     log.info("init db...")
     await init_db()
     log.info("bot started")
-    await bot.delete_webhook(drop_pending_updates=True)
+    # drop_pending_updates=False — чтобы не терять оплаты, пока сервер спал
+    await bot.delete_webhook(drop_pending_updates=False)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
