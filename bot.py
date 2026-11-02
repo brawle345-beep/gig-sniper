@@ -80,12 +80,11 @@ def get_main_menu():
     ]
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
-# Вспомогательная функция для безопасного редактирования (чтобы не было ошибок, если текст не изменился)
 async def safe_edit(message: Message, text: str, reply_markup=None):
     try:
         await message.edit_text(text, reply_markup=reply_markup, disable_web_page_preview=True)
     except TelegramBadRequest:
-        pass # Если сообщение не изменилось или устарело, просто игнорируем
+        pass 
 
 @dp.message(CommandStart())
 async def start(message: Message):
@@ -137,7 +136,6 @@ async def start(message: Message):
 
 @dp.callback_query(F.data == "show_jobs")
 async def show_jobs(callback: CallbackQuery):
-    # Меняем текст на "Загрузку", не создавая новое сообщение
     await safe_edit(callback.message, "🔄 Загружаю свежие вакансии...")
     
     try:
@@ -147,7 +145,7 @@ async def show_jobs(callback: CallbackQuery):
         jobs = []
 
     if not jobs:
-        await safe_edit(callback.message, "Пока новых вакансий нет. Я проверяю доски каждые 10 минут. Загляни позже!", reply_markup=get_main_menu())
+        await safe_edit(callback.message, "Пока новых вакансий нет. Загляни позже!", reply_markup=get_main_menu())
         await callback.answer()
         return
 
@@ -165,12 +163,13 @@ async def show_jobs(callback: CallbackQuery):
         text += f"🔒 <i>Показано {limit} из {len(jobs)} вакансий.</i>\n"
         text += "💎 Купи Премиум, чтобы видеть их все."
     
-    # Меняем "Загрузку" на сами вакансии
     await safe_edit(callback.message, text, reply_markup=get_main_menu())
     await callback.answer()
 
 @dp.callback_query(F.data == "buy_premium")
 async def buy_premium(callback: CallbackQuery):
+    await safe_edit(callback.message, "💎 <b>Счет на оплату отправлен ниже.</b>\n\nПосле успешной оплаты доступ откроется автоматически. (Чтобы вернуться в меню, напиши /start)", reply_markup=None)
+    
     await bot.send_invoice(
         chat_id=callback.from_user.id,
         title="Премиум доступ",
@@ -200,7 +199,6 @@ async def invite(callback: CallbackQuery):
     link = f"https://t.me/{me.username}?start=ref_{callback.from_user.id}"
     text = f"🎁 <b>Реферальная программа</b>\n\nТвоя ссылка:\n<code>{link}</code>\n\nЗа друга — +7 дней Премиума!"
     
-    # Меняем текущее сообщение на рефералку
     await safe_edit(callback.message, text, reply_markup=get_main_menu())
     await callback.answer()
 
@@ -219,7 +217,6 @@ async def my_status(callback: CallbackQuery):
         else:
             text = "📊 <b>Твой статус:</b> Бесплатный\nКупи Премиум, чтобы видеть все вакансии."
             
-    # Меняем текущее сообщение на статус
     await safe_edit(callback.message, text, reply_markup=get_main_menu())
     await callback.answer()
 
