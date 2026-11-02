@@ -3,6 +3,7 @@
 
 import os
 import time
+import json
 import asyncio
 import logging
 from threading import Thread
@@ -112,7 +113,14 @@ async def fetch_feed() -> list:
             async with s.get(FEED_URL) as r:
                 if r.status != 200:
                     return _feed["data"] or []
-                data = await r.json()
+                # Скачиваем как текст и парсим вручную, игнорируя строгий заголовок GitHub
+                raw_text = await r.text()
+                data = json.loads(raw_text)
+                
+                # Защита, если внутри файла словарь {"jobs": [...]}, а не сразу список
+                if isinstance(data, dict):
+                    data = data.get("jobs", [])
+                    
                 _feed["data"] = data
                 _feed["ts"] = now
                 return data
