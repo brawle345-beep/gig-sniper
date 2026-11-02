@@ -18,14 +18,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install requests feedparser
+      - run: pip install -r requirements.txt
       - name: poll
         env:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT: ${{ secrets.TG_CHAT }}
           KEYWORDS: ${{ vars.KEYWORDS }}
           MIN_SCORE: "2"
-          MAX_AGE_HOURS: "72"
+          MAX_AGE_HOURS: "24"
         run: python gig-sniper.py
       - name: persist state
         run: |
