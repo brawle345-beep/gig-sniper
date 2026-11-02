@@ -18,7 +18,7 @@ from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
     LabeledPrice, PreCheckoutQuery, TelegramObject, InlineQuery, InlineQueryResultArticle, InputTextMessageContent
 )
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
@@ -32,8 +32,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 ADMIN_ID = "7183342708"
 MAINTENANCE_MODE = False
 
-# --- Настройки для охвата ---
-CHANNEL_ID = "@gigsnipervakansii" # Твой канал (для проверки подписки)
+CHANNEL_ID = "@gigsnipervakansii"
 CHANNEL_URL = "https://t.me/gigsnipervakansii"
 
 # ---------- База ----------
@@ -62,7 +61,24 @@ async def init_db():
                 PRIMARY KEY (referrer, referred),
                 UNIQUE (referred)
             );
+            
+            CREATE TABLE IF NOT EXISTS channels (
+                name VARCHAR(255) PRIMARY KEY
+            );
         """)
+        # Добавляем дефолтные каналы, если таблица пустая
+        count = await c.fetchval("SELECT COUNT(*) FROM channels")
+        if count == 0:
+            await c.execute("""
+                INSERT INTO channels (name) VALUES 
+                ('it_vakansii_jobs'), ('remote_it_jobs'), ('python_jobs')
+            """)
+
+async def get_channels() -> list:
+    p = await get_pool()
+    async with p.acquire() as c:
+        rows = await c.fetch("SELECT name FROM channels")
+        return [r['name'] for r in rows]
 
 async def get_premium_until(user_id: int):
     p = await get_pool()
@@ -91,8 +107,7 @@ async def check_sub(user_id: int) -> bool:
     try:
         member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
         return member.status in ["member", "administrator", "creator"]
-    except Exception as e:
-        log.warning(f"Ошибка проверки подписки: {e}")
+    except Exception:
         return False
 
 async def apply_referral(ref_id: int, new_uid: int) -> bool:
@@ -115,7 +130,6 @@ async def apply_referral(ref_id: int, new_uid: int) -> bool:
             return True
 
 # ---------- Парсер ----------
-TARGET_CHANNELS = ["it_vakansii_jobs", "remote_it_jobs", "python_jobs"]
 KEYWORDS = ["python", "react", "frontend", "backend", "разработчик", "верстальщик", "удаленка", "вакансия", "ищу"]
 
 _feed = {"data": None, "ts": 0.0, "last_sent_id": None}
@@ -124,10 +138,13 @@ async def fetch_feed() -> list:
     now = time.time()
     if _feed["data"] is not None and now - _feed["ts"] < 300:
         return _feed["data"]
+        
     jobs = []
     headers = {"User-Agent": "Mozilla/5.0"}
+    channels = await get_channels()
+    
     async with aiohttp.ClientSession(headers=headers) as session:
-        for channel in TARGET_CHANNELS:
+        for channel in channels:
             url = f"https://t.me/s/{channel}"
             try:
                 async with session.get(url, timeout=10) as r:
@@ -145,22 +162,23 @@ async def fetch_feed() -> list:
                         link_div = msg.find('a', class_='tgme_widget_message_date')
                         post_url = link_div['href'] if link_div else url
                         jobs.append({"text": text, "contact_url": contact_url, "post_url": post_url, "channel": channel})
-            except Exception: pass
+            except Exception as e:
+                log.warning(f"Ошибка парсинга {channel}: {e}")
+                
     jobs = jobs[-20:]
     jobs.reverse()
     _feed["data"] = jobs
     _feed["ts"] = now
     return jobs
 
-# ---------- Авторассылка (Background Task) ----------
+# ---------- Авторассылка ----------
 async def autopush_worker():
-    await asyncio.sleep(10) # Ждем запуска
+    await asyncio.sleep(10)
     while True:
         try:
             jobs = await fetch_feed()
             if jobs:
                 latest_job = jobs[0]
-                # Если это новая вакансия (проверяем по ссылке)
                 if _feed["last_sent_id"] != latest_job['post_url']:
                     _feed["last_sent_id"] = latest_job['post_url']
                     
@@ -168,26 +186,23 @@ async def autopush_worker():
                     async with p.acquire() as c:
                         users = await c.fetch("SELECT user_id FROM users WHERE premium_until > NOW()")
                     
-                    # Формируем пуш
                     raw_text = re.sub(r'\n{3,}', '\n\n', latest_job['text'].strip())
                     if len(raw_text) > 400: raw_text = raw_text[:400] + "..."
-                    
                     push_text = f"🚨 <b>СВЕЖАЯ ВАКАНСИЯ!</b>\n\n{raw_text}"
                     
                     kb = InlineKeyboardMarkup(inline_keyboard=[[
                         InlineKeyboardButton(text="🔥 Открыть в боте", url=f"https://t.me/{(await bot.get_me()).username}?start=push")
                     ]])
                     
-                    # Шлем всем (в реальности лучше батчами, но для старта сойдет)
                     for u in users:
                         if str(u['user_id']) == ADMIN_ID: continue
                         try:
                             await bot.send_message(u['user_id'], push_text, reply_markup=kb, disable_web_page_preview=True)
-                            await asyncio.sleep(0.05) # Защита от лимитов ТГ
+                            await asyncio.sleep(0.05)
                         except Exception: pass
         except Exception as e:
             log.error(f"Autopush error: {e}")
-        await asyncio.sleep(300) # Проверяем каждые 5 минут
+        await asyncio.sleep(300)
 
 # ---------- Flask ----------
 app = Flask(__name__)
@@ -229,7 +244,7 @@ def get_sub_menu():
         [InlineKeyboardButton(text="✅ Я подписался", callback_data="check_sub")]
     ])
 
-# ---------- Логика Карточек ----------
+# ---------- Карточки ----------
 async def render_job(cb: CallbackQuery, index: int):
     if not await check_sub(cb.from_user.id):
         await cb.message.edit_text("⚠️ <b>Для доступа к вакансиям подпишись на наш канал!</b>", reply_markup=get_sub_menu())
@@ -271,7 +286,7 @@ async def render_job(cb: CallbackQuery, index: int):
         await cb.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), disable_web_page_preview=True)
     except TelegramBadRequest: pass
 
-# ---------- Инлайн-режим (Охват) ----------
+# ---------- Инлайн ----------
 @dp.inline_query()
 async def inline_search(query: InlineQuery):
     jobs = await fetch_feed()
@@ -283,13 +298,8 @@ async def inline_search(query: InlineQuery):
         raw_text = re.sub(r'\n{3,}', '\n\n', j['text'].strip())[:100] + "..."
         results.append(
             InlineQueryResultArticle(
-                id=str(i),
-                title=f"Вакансия из @{j['channel']}",
-                description=raw_text,
-                input_message_content=InputTextMessageContent(
-                    message_text=f"💼 <b>Вакансия:</b>\n\n{j['text'][:1000]}",
-                    parse_mode=ParseMode.HTML
-                )
+                id=str(i), title=f"Вакансия из @{j['channel']}", description=raw_text,
+                input_message_content=InputTextMessageContent(message_text=f"💼 <b>Вакансия:</b>\n\n{j['text'][:1000]}", parse_mode=ParseMode.HTML)
             )
         )
     await query.answer(results, cache_time=60, is_personal=True)
@@ -395,6 +405,7 @@ async def my_status(cb: CallbackQuery):
     await cb.message.edit_text(text, reply_markup=get_main_menu(uid == ADMIN_ID))
     await cb.answer()
 
+# ---------- Админка ----------
 @dp.callback_query(F.data == "admin_panel")
 async def admin_panel(cb: CallbackQuery):
     if str(cb.from_user.id) != ADMIN_ID: return
@@ -403,10 +414,55 @@ async def admin_panel(cb: CallbackQuery):
         total = await c.fetchval("SELECT COUNT(*) FROM users")
         premium_users = await c.fetch("SELECT user_id, premium_until FROM users WHERE premium_until > NOW() AND is_paid = TRUE")
         trial_users = await c.fetchval("SELECT COUNT(*) FROM users WHERE premium_until > NOW() AND is_paid = FALSE")
+        channels = await c.fetch("SELECT name FROM channels")
+        
     prem_count = len(premium_users)
-    text = f"🛠 <b>Админ-панель</b>\n\n👥 Юзеров: <b>{total}</b>\n💎 Купили: <b>{prem_count}</b>\n🎁 Триал: <b>{trial_users}</b>\n💰 Доход: <b>{prem_count * 250} ⭐</b>\n"
+    ch_list = ", ".join([f"@{r['name']}" for r in channels])
+    
+    text = (
+        f"🛠 <b>Админ-панель</b>\n\n"
+        f"👥 Юзеров: <b>{total}</b>\n"
+        f"💎 Купили: <b>{prem_count}</b>\n"
+        f"🎁 Триал: <b>{trial_users}</b>\n"
+        f"💰 Доход: <b>{prem_count * 250} ⭐</b>\n\n"
+        f"📡 <b>Каналы для парсинга:</b>\n<code>{ch_list}</code>\n\n"
+        f"<i>Чтобы добавить канал, напиши:</i>\n"
+        f"<code>/add_channel имя_канала</code>\n"
+        f"<i>Чтобы удалить:</i>\n"
+        f"<code>/del_channel имя_канала</code>"
+    )
     await cb.message.edit_text(text, reply_markup=get_main_menu(True))
     await cb.answer()
+
+@dp.message(F.text.startswith("/add_channel "))
+async def add_channel(message: Message):
+    if str(message.from_user.id) != ADMIN_ID: return
+    raw_name = message.text.replace("/add_channel ", "").strip()
+    clean_name = raw_name.replace("https://t.me/", "").replace("@", "").strip()
+    
+    p = await get_pool()
+    async with p.acquire() as c:
+        try:
+            await c.execute("INSERT INTO channels (name) VALUES ($1)", clean_name)
+            _feed["data"] = None # Сбрасываем кеш, чтобы бот сразу прочитал новый канал
+            await message.answer(f"✅ Канал <b>@{clean_name}</b> добавлен в парсер.")
+        except asyncpg.exceptions.UniqueViolationError:
+            await message.answer(f"⚠️ Канал <b>@{clean_name}</b> уже есть в списке.")
+
+@dp.message(F.text.startswith("/del_channel "))
+async def del_channel(message: Message):
+    if str(message.from_user.id) != ADMIN_ID: return
+    raw_name = message.text.replace("/del_channel ", "").strip()
+    clean_name = raw_name.replace("https://t.me/", "").replace("@", "").strip()
+    
+    p = await get_pool()
+    async with p.acquire() as c:
+        result = await c.execute("DELETE FROM channels WHERE name = $1", clean_name)
+        if result == "DELETE 1":
+            _feed["data"] = None
+            await message.answer(f"🗑 Канал <b>@{clean_name}</b> удален.")
+        else:
+            await message.answer(f"❌ Канал <b>@{clean_name}</b> не найден.")
 
 @dp.message(F.text == "/clear_fakes")
 async def clear_fakes(message: Message):
@@ -428,7 +484,7 @@ async def give_premium(message: Message):
 async def main():
     log.info("init db...")
     await init_db()
-    asyncio.create_task(autopush_worker()) # Запуск рассылки
+    asyncio.create_task(autopush_worker())
     log.info("bot started")
     await bot.delete_webhook(drop_pending_updates=False)
     await dp.start_polling(bot)
