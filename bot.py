@@ -1,10 +1,12 @@
 # language: Python 3.11, file: bot.py, runtime: aiogram 3.x + asyncpg + aiohttp
-# pip install aiogram asyncpg aiohttp flask
+# pip install aiogram==3.20.0 asyncpg==0.30.0 aiohttp==3.11.0 flask==3.1.2
+
 import os
 import time
 import asyncio
 import logging
 from threading import Thread
+from html import escape
 
 import aiohttp
 import asyncpg
@@ -69,7 +71,7 @@ async def add_premium_days(user_id: int, days: int):
             ON CONFLICT (user_id) DO UPDATE
             SET premium_until = GREATEST(COALESCE(users.premium_until, NOW()), NOW())
                                 + ($2 || ' days')::interval
-        """, user_id, days)
+        """, user_id, str(days))
 
 async def has_premium(user_id: int) -> bool:
     if str(user_id) == ADMIN_ID:
@@ -176,7 +178,7 @@ async def start(message: Message):
         await add_premium_days(uid, 0)
         if not is_admin:
             try:
-                name = message.from_user.first_name
+                name = escape(message.from_user.first_name)
                 if message.from_user.username:
                     name += f" (@{message.from_user.username})"
                 await bot.send_message(ADMIN_ID, f"👤 <b>Новый юзер</b>\n{name}\nID: <code>{uid}</code>")
@@ -189,12 +191,12 @@ async def start(message: Message):
         if raw.isdigit() and await apply_referral(int(raw), uid):
             try:
                 await bot.send_message(int(raw),
-                    f"🎁 По твоей ссылке перешёл {message.from_user.first_name}! +7 дней.")
+                    f"🎁 По твоей ссылке перешёл {escape(message.from_user.first_name)}! +7 дней.")
             except Exception:
                 pass
 
     await message.answer(
-        f"👋 <b>Привет, {message.from_user.first_name}!</b>\n\n"
+        f"👋 <b>Привет, {escape(message.from_user.first_name)}!</b>\n\n"
         "🤖 Это <b>Gig Sniper</b> — радар свежих IT-вакансий и заказов.\n\n"
         "<blockquote>Сканируем биржи каждые 10 минут, отсеиваем шлак, "
         "присылаем только актуальное в долларах и рублях.</blockquote>\n\n"
