@@ -166,7 +166,7 @@ REQUIRED_WORDS = ["python", "react", "frontend", "backend", "разработч�
 STOP_WORDS = ["курс", "промокод", "скидка", "подпишись", "реклама", "инфобизнес", "наставничество", "база", "слив", "обучение", "заработок", "доход", "крипт", "бесплатно", "лайфхак", "марафон", "вебинар"]
 
 _feed = {"data": None, "ts": 0.0}
-_feed_lock = asyncio.Lock() # Защита от спама парсером (Thundering Herd)
+_feed_lock = asyncio.Lock() 
 
 def is_valid_job(text: str) -> bool:
     text_lower = text.lower()
@@ -298,13 +298,19 @@ async def safe_edit(message: Message, text: str, reply_markup=None):
         if "message is not modified" not in str(e):
             log.warning("edit: %s", e)
 
-def get_main_menu(is_admin=False):
+async def build_main_menu(user_id: int, is_admin=False):
     kb = [
         [InlineKeyboardButton(text="🔥 Смотреть вакансии", callback_data="show_jobs:0")],
         [InlineKeyboardButton(text="💎 Премиум-доступ", callback_data="buy_premium"), InlineKeyboardButton(text="👤 Профиль", callback_data="my_status")],
         [InlineKeyboardButton(text="🎁 Пригласить друга", callback_data="invite")],
-        [InlineKeyboardButton(text="📢 Наш канал", url=CHANNEL_URL)],
     ]
+    
+    user_filter = await get_user_filter(user_id)
+    if user_filter:
+        short_filter = user_filter[:15] + "..." if len(user_filter) > 15 else user_filter
+        kb.insert(2, [InlineKeyboardButton(text=f"❌ Сбросить фильтр ({escape(short_filter)})", callback_data="reset_filter_menu")])
+        
+    kb.append([InlineKeyboardButton(text="📢 Наш канал", url=CHANNEL_URL)])
     if is_admin:
         kb.insert(0, [InlineKeyboardButton(text="🛠 Админ-панель", callback_data="admin_panel")])
     return InlineKeyboardMarkup(inline_keyboard=kb)
@@ -384,8 +390,8 @@ async def render_job(cb: CallbackQuery, index: int):
         text = "😴 Пока новых вакансий нет."
         if user_filter:
             safe_f = escape(user_filter)
-            text = f"😴 По фильтру <b>'{safe_f}'</b> пока ничего нет.\nПопробуй сбросить фильтр."
-        await safe_edit(cb.message, text, get_main_menu(str(cb.from_user.id) == ADMIN_ID))
+            text = f"😴 По фильтру <b>'{safe_f}'</b> пока ничего нет.\nПопробуй сбросить фильтр в главном меню."
+        await safe_edit(cb.message, text, await build_main_menu(cb.from_user.id, str(cb.from_user.id) == ADMIN_ID))
         return
 
     index = max(0, min(index, len(jobs) - 1))
@@ -411,7 +417,8 @@ async def render_job(cb: CallbackQuery, index: int):
     if contact_row: kb.append(contact_row)
     
     if is_prem:
-        f_text = f"⚙️ Фильтр: {escape(user_filter)}" if user_filter else "⚙️ Фильтры"
+        short_f = user_filter[:15] + "..." if user_filter and len(user_filter) > 15 else user_filter
+        f_text = f"⚙️ Фильтр: {escape(short_f)}" if short_f else "⚙️ Фильтры"
         kb.append([InlineKeyboardButton(text=f_text, callback_data="user_filters")])
     else:
         kb.append([InlineKeyboardButton(text="💎 Купить Премиум", callback_data="buy_premium")])
@@ -449,7 +456,11 @@ async def cancel_handler(message: Message, state: FSMContext):
     if current_state is None:
         return
     await state.clear()
-    await message.answer("❌ Действие отменено.", reply_markup=get_main_menu(str(message.from_user.id) == ADMIN_ID))
+    
+    if current_state in [AdminStates.give_id.state, AdminStates.give_days.state, AdminStates.add_channel.state, AdminStates.del_channel.state]:
+        await message.answer("❌ Действие отменено.", reply_markup=get_admin_menu())
+    else:
+        await message.answer("❌ Действие отменено.", reply_markup=await build_main_menu(message.from_user.id, str(message.from_user.id) == ADMIN_ID))
 
 # ---------- Хендлеры ----------
 @dp.message(CommandStart())
@@ -483,31 +494,43 @@ async def start(message: Message, state: FSMContext):
         "🚀 <b>Gig Sniper</b> — твой радар IT-заказов из Telegram.\n\n"
         "🎁 Тебе активирован <b>3-дневный Премиум</b>.\n\n"
         "<i>Совет: напиши @этот_бот в любом чате, чтобы искать вакансии без входа в бота.</i>",
-        reply_markup=get_main_menu(is_admin),
+        reply_markup=await build_main_menu(uid, is_admin),
     )
 
 @dp.callback_query(F.data == "check_sub")
 async def cb_check_sub(cb: CallbackQuery):
     if await check_sub(cb.from_user.id):
-        await cb.message.delete()
-        await cb.message.answer("✅ Подписка подтверждена! Жми /start", reply_markup=get_main_menu(str(cb.from_user.id) == ADMIN_ID))
+        await cb.answer()
+        try: await cb.message.delete()
+        except Exception: pass
+        await cb.message.answer("✅ Подписка подтверждена! Жми /start", reply_markup=await build_main_menu(cb.from_user.id, str(cb.from_user.id) == ADMIN_ID))
     else:
         await cb.answer("❌ Ты всё еще не подписан!", show_alert=True)
 
 @dp.callback_query(F.data == "main_menu")
 async def back_to_menu(cb: CallbackQuery, state: FSMContext):
-    await state.clear()
-    await safe_edit(cb.message, "⚡️ <b>Главное меню:</b>", get_main_menu(str(cb.from_user.id) == ADMIN_ID))
     await cb.answer()
+    await state.clear()
+    await safe_edit(cb.message, "⚡️ <b>Главное меню:</b>", await build_main_menu(cb.from_user.id, str(cb.from_user.id) == ADMIN_ID))
+
+@dp.callback_query(F.data == "reset_filter_menu")
+async def reset_filter_from_menu(cb: CallbackQuery, state: FSMContext):
+    await cb.answer("✅ Фильтр сброшен. Показываю все вакансии.", show_alert=True)
+    await state.clear()
+    p = await get_pool()
+    async with p.acquire() as c:
+        await c.execute("UPDATE users SET filter_word = NULL WHERE user_id = $1", cb.from_user.id)
+        
+    await safe_edit(cb.message, "⚡️ <b>Главное меню:</b>\n\n<i>Фильтр успешно сброшен.</i>", await build_main_menu(cb.from_user.id, str(cb.from_user.id) == ADMIN_ID))
 
 @dp.callback_query(F.data.startswith("show_jobs:"))
 async def show_jobs(cb: CallbackQuery, state: FSMContext):
+    await cb.answer()
     await state.clear()
     index = int(cb.data.split(":")[1])
     if index == 0 and not cb.message.text.startswith("💼"):
         await safe_edit(cb.message, "🔄 <i>Сканирую каналы...</i>")
     await render_job(cb, index)
-    await cb.answer()
 
 @dp.callback_query(F.data == "ignore")
 async def ignore_btn(cb: CallbackQuery): await cb.answer()
@@ -519,6 +542,7 @@ async def show_filters(cb: CallbackQuery, state: FSMContext):
         await cb.answer("Фильтры доступны только с Премиумом!", show_alert=True)
         return
         
+    await cb.answer()
     current_filter = await get_user_filter(cb.from_user.id)
     f_text = f"<b>{escape(current_filter)}</b>" if current_filter else "<i>Не задан</i>"
     
@@ -527,19 +551,17 @@ async def show_filters(cb: CallbackQuery, state: FSMContext):
         "⚙️ <b>Настройка фильтра</b>\n\n"
         f"Текущий фильтр: {f_text}\n\n"
         "Отправь мне слово или фразу, и бот будет показывать только те вакансии, где оно встречается (например, <code>python</code> или <code>react</code>).\n\n"
-        "Чтобы <b>удалить</b> фильтр, отправь знак <code>-</code>.",
+        "Чтобы <b>удалить</b> фильтр, отправь знак <code>-</code> или нажми «Сбросить» в меню.",
         get_user_cancel_menu()
     )
-    await cb.answer()
 
 @dp.message(UserStates.waiting_for_filter)
 async def set_filter(message: Message, state: FSMContext):
     if not await has_premium(message.from_user.id):
         await state.clear()
-        await message.answer("У тебя закончился Премиум. Купи подписку для использования фильтров.", reply_markup=get_main_menu(str(message.from_user.id) == ADMIN_ID))
+        await message.answer("У тебя закончился Премиум. Купи подписку для использования фильтров.", reply_markup=await build_main_menu(message.from_user.id, str(message.from_user.id) == ADMIN_ID))
         return
         
-    # Отсекаем команды
     if not message.text or message.text.startswith('/'):
         await state.clear()
         await message.answer("❌ Отменено.", reply_markup=get_user_cancel_menu())
@@ -564,12 +586,12 @@ async def set_filter(message: Message, state: FSMContext):
 # ---------- Оплата ----------
 @dp.callback_query(F.data == "buy_premium")
 async def buy_premium(cb: CallbackQuery):
-    await safe_edit(cb.message, "💎 <b>Счёт отправлен ниже.</b>", get_main_menu(str(cb.from_user.id) == ADMIN_ID))
+    await cb.answer()
+    await safe_edit(cb.message, "💎 <b>Счёт отправлен ниже.</b>", await build_main_menu(cb.from_user.id, str(cb.from_user.id) == ADMIN_ID))
     await bot.send_invoice(
         chat_id=cb.from_user.id, title="Премиум (30 дней)", description="Полный доступ к вакансиям и фильтрам.",
         payload="premium_30", provider_token="", currency="XTR", prices=[LabeledPrice(label="Доступ", amount=250)],
     )
-    await cb.answer()
 
 @dp.pre_checkout_query()
 async def pre_checkout(q: PreCheckoutQuery): await q.answer(ok=True)
@@ -583,38 +605,40 @@ async def on_paid(message: Message):
         async with p.acquire() as c: await c.execute("UPDATE users SET is_paid = TRUE WHERE user_id = $1", message.from_user.id)
         await bot.send_message(ADMIN_ID, f"💰 <b>Оплата!</b> ID: <code>{message.from_user.id}</code>")
     except Exception: pass
-    await message.answer("✅ <b>Оплата прошла!</b> Доступ на 30 дней открыт.", reply_markup=get_main_menu(str(message.from_user.id) == ADMIN_ID))
+    await message.answer("✅ <b>Оплата прошла!</b> Доступ на 30 дней открыт.", reply_markup=await build_main_menu(message.from_user.id, str(message.from_user.id) == ADMIN_ID))
 
 @dp.callback_query(F.data == "invite")
 async def invite(cb: CallbackQuery):
+    await cb.answer()
     me = await bot.get_me()
     link = f"https://t.me/{me.username}?start=ref_{cb.from_user.id}"
     await safe_edit(cb.message,
         f"🎁 <b>Партнёрская программа</b>\n\nТвоя ссылка:\n<code>{link}</code>\n\n<blockquote>За каждого друга — <b>+7 дней Премиума</b>.</blockquote>",
-        get_main_menu(str(cb.from_user.id) == ADMIN_ID))
-    await cb.answer()
+        await build_main_menu(cb.from_user.id, str(cb.from_user.id) == ADMIN_ID))
 
 @dp.callback_query(F.data == "my_status")
 async def my_status(cb: CallbackQuery):
+    await cb.answer()
     uid = str(cb.from_user.id)
     if uid == ADMIN_ID: text = "👑 <b>Статус:</b> Админ"
     else:
         until = await get_premium_until(cb.from_user.id)
         if until and until.timestamp() > time.time(): text = f"💎 <b>Статус:</b> Премиум (Осталось дней: {(int((until.timestamp() - time.time()) / 86400))})"
         else: text = "👤 <b>Статус:</b> Бесплатный"
-    await safe_edit(cb.message, text, get_main_menu(uid == ADMIN_ID))
-    await cb.answer()
+    await safe_edit(cb.message, text, await build_main_menu(cb.from_user.id, uid == ADMIN_ID))
 
 # ---------- Админ-панель и Кнопки ----------
 @dp.callback_query(F.data == "admin_panel")
 async def admin_panel(cb: CallbackQuery, state: FSMContext):
-    await render_admin_panel(cb, state)
     await cb.answer()
+    await render_admin_panel(cb, state)
 
 @dp.callback_query(F.data == "admin_toggle_maint")
-async def toggle_maint(cb: CallbackQuery):
+async def toggle_maint(cb: CallbackQuery, state: FSMContext):
     global IS_MAINTENANCE
-    if str(cb.from_user.id) != ADMIN_ID: return
+    if str(cb.from_user.id) != ADMIN_ID:
+        await cb.answer("У вас нет доступа.", show_alert=True)
+        return
     
     IS_MAINTENANCE = not IS_MAINTENANCE
     val = '1' if IS_MAINTENANCE else '0'
@@ -625,11 +649,14 @@ async def toggle_maint(cb: CallbackQuery):
         
     status_text = "ВКЛЮЧЕНЫ (доступ только у тебя)" if IS_MAINTENANCE else "ВЫКЛЮЧЕНЫ (бот работает для всех)"
     await cb.answer(f"Тех. работы {status_text}", show_alert=True)
-    await render_admin_panel(cb)
+    await render_admin_panel(cb, state)
 
 @dp.callback_query(F.data == "admin_give")
 async def admin_give_start(cb: CallbackQuery, state: FSMContext):
-    if str(cb.from_user.id) != ADMIN_ID: return
+    if str(cb.from_user.id) != ADMIN_ID:
+        await cb.answer("У вас нет доступа.", show_alert=True)
+        return
+    await cb.answer()
     await state.set_state(AdminStates.give_id)
     await safe_edit(cb.message,
         "💎 <b>Выдача Премиума</b>\n\n"
@@ -637,7 +664,6 @@ async def admin_give_start(cb: CallbackQuery, state: FSMContext):
         "<i>Чтобы отменить, отправь /cancel</i>",
         get_cancel_menu()
     )
-    await cb.answer()
 
 @dp.message(AdminStates.give_id)
 async def admin_give_days_input(message: Message, state: FSMContext):
@@ -666,7 +692,12 @@ async def admin_give_days_finish(message: Message, state: FSMContext):
         return
         
     data = await state.get_data()
-    target_uid = data['target_uid']
+    target_uid = data.get('target_uid')
+    
+    if not target_uid:
+        await message.answer("❌ Ошибка: ID не найден. Начните заново.", reply_markup=get_admin_menu())
+        await state.clear()
+        return
     
     await add_premium_days(target_uid, days)
     await state.clear()
@@ -677,17 +708,22 @@ async def admin_give_days_finish(message: Message, state: FSMContext):
     )
 
 @dp.callback_query(F.data == "admin_clear")
-async def admin_clear_fakes(cb: CallbackQuery):
-    if str(cb.from_user.id) != ADMIN_ID: return
+async def admin_clear_fakes(cb: CallbackQuery, state: FSMContext):
+    if str(cb.from_user.id) != ADMIN_ID:
+        await cb.answer("У вас нет доступа.", show_alert=True)
+        return
+    await cb.answer("🧹 Все неоплаченные подписки сброшены!", show_alert=True)
     p = await get_pool()
     async with p.acquire() as c: 
         await c.execute("UPDATE users SET premium_until = NOW(), filter_word = NULL WHERE is_paid = FALSE")
-    await cb.answer("🧹 Все неоплаченные подписки сброшены!", show_alert=True)
-    await render_admin_panel(cb)
+    await render_admin_panel(cb, state)
 
 @dp.callback_query(F.data == "admin_add_ch")
 async def admin_add_ch_start(cb: CallbackQuery, state: FSMContext):
-    if str(cb.from_user.id) != ADMIN_ID: return
+    if str(cb.from_user.id) != ADMIN_ID:
+        await cb.answer("У вас нет доступа.", show_alert=True)
+        return
+    await cb.answer()
     await state.set_state(AdminStates.add_channel)
     await safe_edit(cb.message,
         "➕ <b>Добавление канала</b>\n\n"
@@ -695,7 +731,6 @@ async def admin_add_ch_start(cb: CallbackQuery, state: FSMContext):
         "<i>Чтобы отменить, отправь /cancel</i>",
         get_cancel_menu()
     )
-    await cb.answer()
 
 @dp.message(AdminStates.add_channel)
 async def admin_add_ch_finish(message: Message, state: FSMContext):
@@ -719,7 +754,10 @@ async def admin_add_ch_finish(message: Message, state: FSMContext):
 
 @dp.callback_query(F.data == "admin_del_ch")
 async def admin_del_ch_start(cb: CallbackQuery, state: FSMContext):
-    if str(cb.from_user.id) != ADMIN_ID: return
+    if str(cb.from_user.id) != ADMIN_ID:
+        await cb.answer("У вас нет доступа.", show_alert=True)
+        return
+    await cb.answer()
     await state.set_state(AdminStates.del_channel)
     await safe_edit(cb.message,
         "🗑 <b>Удаление канала</b>\n\n"
@@ -727,7 +765,6 @@ async def admin_del_ch_start(cb: CallbackQuery, state: FSMContext):
         "<i>Чтобы отменить, отправь /cancel</i>",
         get_cancel_menu()
     )
-    await cb.answer()
 
 @dp.message(AdminStates.del_channel)
 async def admin_del_ch_finish(message: Message, state: FSMContext):
