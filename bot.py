@@ -16,7 +16,7 @@ from flask import Flask
 from aiogram import Bot, Dispatcher, F, BaseMiddleware
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
-    LabeledPrice, PreCheckoutQuery, TelegramObject,
+    LabeledPrice, PreCheckoutQuery, TelegramObject, InlineQuery, InlineQueryResultArticle, InputTextMessageContent
 )
 from aiogram.filters import CommandStart
 from aiogram.client.default import DefaultBotProperties
@@ -31,6 +31,10 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 
 ADMIN_ID = "7183342708"
 MAINTENANCE_MODE = False
+
+# --- Настройки для охвата ---
+CHANNEL_ID = "@gigsnipervakansii" # Твой канал (для проверки подписки)
+CHANNEL_URL = "https://t.me/gigsnipervakansii"
 
 # ---------- База ----------
 _pool: asyncpg.Pool | None = None
@@ -51,6 +55,7 @@ async def init_db():
                 is_paid BOOLEAN DEFAULT FALSE
             );
             ALTER TABLE users ADD COLUMN IF NOT EXISTS is_paid BOOLEAN DEFAULT FALSE;
+            
             CREATE TABLE IF NOT EXISTS referrals (
                 referrer BIGINT NOT NULL,
                 referred BIGINT NOT NULL,
@@ -81,6 +86,15 @@ async def has_premium(user_id: int) -> bool:
     until = await get_premium_until(user_id)
     return bool(until and until.timestamp() > time.time())
 
+async def check_sub(user_id: int) -> bool:
+    if str(user_id) == ADMIN_ID: return True
+    try:
+        member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
+        return member.status in ["member", "administrator", "creator"]
+    except Exception as e:
+        log.warning(f"Ошибка проверки подписки: {e}")
+        return False
+
 async def apply_referral(ref_id: int, new_uid: int) -> bool:
     if ref_id == new_uid: return False
     p = await get_pool()
@@ -100,18 +114,18 @@ async def apply_referral(ref_id: int, new_uid: int) -> bool:
             """, ref_id)
             return True
 
-# ---------- Парсер Телеграм-каналов ----------
-TARGET_CHANNELS = ["it_vakansii_jobs", "remote_it_jobs", "python_jobs", "golang_jobs"]
+# ---------- Парсер ----------
+TARGET_CHANNELS = ["it_vakansii_jobs", "remote_it_jobs", "python_jobs"]
 KEYWORDS = ["python", "react", "frontend", "backend", "разработчик", "верстальщик", "удаленка", "вакансия", "ищу"]
 
-_feed = {"data": None, "ts": 0.0}
+_feed = {"data": None, "ts": 0.0, "last_sent_id": None}
 
 async def fetch_feed() -> list:
     now = time.time()
     if _feed["data"] is not None and now - _feed["ts"] < 300:
         return _feed["data"]
     jobs = []
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    headers = {"User-Agent": "Mozilla/5.0"}
     async with aiohttp.ClientSession(headers=headers) as session:
         for channel in TARGET_CHANNELS:
             url = f"https://t.me/s/{channel}"
@@ -131,13 +145,49 @@ async def fetch_feed() -> list:
                         link_div = msg.find('a', class_='tgme_widget_message_date')
                         post_url = link_div['href'] if link_div else url
                         jobs.append({"text": text, "contact_url": contact_url, "post_url": post_url, "channel": channel})
-            except Exception as e:
-                log.warning(f"Ошибка парсинга {channel}: {e}")
+            except Exception: pass
     jobs = jobs[-20:]
     jobs.reverse()
     _feed["data"] = jobs
     _feed["ts"] = now
     return jobs
+
+# ---------- Авторассылка (Background Task) ----------
+async def autopush_worker():
+    await asyncio.sleep(10) # Ждем запуска
+    while True:
+        try:
+            jobs = await fetch_feed()
+            if jobs:
+                latest_job = jobs[0]
+                # Если это новая вакансия (проверяем по ссылке)
+                if _feed["last_sent_id"] != latest_job['post_url']:
+                    _feed["last_sent_id"] = latest_job['post_url']
+                    
+                    p = await get_pool()
+                    async with p.acquire() as c:
+                        users = await c.fetch("SELECT user_id FROM users WHERE premium_until > NOW()")
+                    
+                    # Формируем пуш
+                    raw_text = re.sub(r'\n{3,}', '\n\n', latest_job['text'].strip())
+                    if len(raw_text) > 400: raw_text = raw_text[:400] + "..."
+                    
+                    push_text = f"🚨 <b>СВЕЖАЯ ВАКАНСИЯ!</b>\n\n{raw_text}"
+                    
+                    kb = InlineKeyboardMarkup(inline_keyboard=[[
+                        InlineKeyboardButton(text="🔥 Открыть в боте", url=f"https://t.me/{(await bot.get_me()).username}?start=push")
+                    ]])
+                    
+                    # Шлем всем (в реальности лучше батчами, но для старта сойдет)
+                    for u in users:
+                        if str(u['user_id']) == ADMIN_ID: continue
+                        try:
+                            await bot.send_message(u['user_id'], push_text, reply_markup=kb, disable_web_page_preview=True)
+                            await asyncio.sleep(0.05) # Защита от лимитов ТГ
+                        except Exception: pass
+        except Exception as e:
+            log.error(f"Autopush error: {e}")
+        await asyncio.sleep(300) # Проверяем каждые 5 минут
 
 # ---------- Flask ----------
 app = Flask(__name__)
@@ -155,8 +205,6 @@ class Maintenance(BaseMiddleware):
         if MAINTENANCE_MODE and not (event.from_user and str(event.from_user.id) == ADMIN_ID):
             if isinstance(event, Message):
                 await event.answer("🛠 <b>Бот на обслуживании.</b> Загляни чуть позже.")
-            elif isinstance(event, CallbackQuery):
-                await event.answer("🛠 Бот на обслуживании.", show_alert=True)
             return
         return await handler(event, data)
 
@@ -169,104 +217,124 @@ def get_main_menu(is_admin=False):
         [InlineKeyboardButton(text="🔥 Смотреть вакансии", callback_data="show_jobs:0")],
         [InlineKeyboardButton(text="💎 Премиум-доступ", callback_data="buy_premium"), InlineKeyboardButton(text="👤 Профиль", callback_data="my_status")],
         [InlineKeyboardButton(text="🎁 Пригласить друга", callback_data="invite")],
-        [InlineKeyboardButton(text="📢 Наш канал", url="https://t.me/gigsnipervakansii")],
+        [InlineKeyboardButton(text="📢 Наш канал", url=CHANNEL_URL)],
     ]
     if is_admin:
         kb.insert(0, [InlineKeyboardButton(text="🛠 Админ-панель", callback_data="admin_panel")])
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
-# ---------- Логика Карточек (Пагинация) ----------
+def get_sub_menu():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📢 Подписаться на канал", url=CHANNEL_URL)],
+        [InlineKeyboardButton(text="✅ Я подписался", callback_data="check_sub")]
+    ])
+
+# ---------- Логика Карточек ----------
 async def render_job(cb: CallbackQuery, index: int):
+    if not await check_sub(cb.from_user.id):
+        await cb.message.edit_text("⚠️ <b>Для доступа к вакансиям подпишись на наш канал!</b>", reply_markup=get_sub_menu())
+        return
+
     jobs = await fetch_feed()
     is_prem = await has_premium(cb.from_user.id)
     limit = 10 if is_prem else 3
     jobs = jobs[:limit]
     
     if not jobs:
-        await cb.message.edit_text("😴 Пока новых вакансий нет. Загляни позже!", reply_markup=get_main_menu(str(cb.from_user.id) == ADMIN_ID))
+        await cb.message.edit_text("😴 Пока новых вакансий нет.", reply_markup=get_main_menu(str(cb.from_user.id) == ADMIN_ID))
         return
 
     index = max(0, min(index, len(jobs) - 1))
     job = jobs[index]
     
-    # Жесткая обрезка текста, чтобы карточка не "плыла" вниз
     raw_text = re.sub(r'\n{3,}', '\n\n', job['text'].strip())
-    if len(raw_text) > 600:
-        raw_text = raw_text[:600].rsplit(' ', 1)[0] + "..."
+    if len(raw_text) > 600: raw_text = raw_text[:600].rsplit(' ', 1)[0] + "..."
     
-    text = (
-        f"<b>💼 Вакансия {index+1} из {len(jobs)}</b>\n"
-        f"<i>Источник: @{job['channel']}</i>\n"
-        "━━━━━━━━━━━━━━━━━━\n\n"
-        f"{raw_text}"
-    )
+    text = f"<b>💼 Вакансия {index+1} из {len(jobs)}</b>\n<i>Источник: @{job['channel']}</i>\n━━━━━━━━━━━━━━━━━━\n\n{raw_text}"
     
-    # Кнопки навигации (строго в одном ряду)
     nav_row = []
-    if index > 0:
-        nav_row.append(InlineKeyboardButton(text="⬅️", callback_data=f"show_jobs:{index-1}"))
-    else:
-        nav_row.append(InlineKeyboardButton(text="⬅️", callback_data="ignore"))
-        
+    if index > 0: nav_row.append(InlineKeyboardButton(text="⬅️", callback_data=f"show_jobs:{index-1}"))
+    else: nav_row.append(InlineKeyboardButton(text="⬅️", callback_data="ignore"))
     nav_row.append(InlineKeyboardButton(text=f"{index+1}/{len(jobs)}", callback_data="ignore"))
-    
-    if index < len(jobs) - 1:
-        nav_row.append(InlineKeyboardButton(text="➡️", callback_data=f"show_jobs:{index+1}"))
-    else:
-        nav_row.append(InlineKeyboardButton(text="➡️", callback_data="ignore"))
+    if index < len(jobs) - 1: nav_row.append(InlineKeyboardButton(text="➡️", callback_data=f"show_jobs:{index+1}"))
+    else: nav_row.append(InlineKeyboardButton(text="➡️", callback_data="ignore"))
 
     kb = [nav_row]
-    
-    # Кнопки связи
     contact_row = []
-    if job.get('contact_url'):
-        contact_row.append(InlineKeyboardButton(text="💬 Написать", url=job['contact_url']))
-    if job.get('post_url'):
-        contact_row.append(InlineKeyboardButton(text="🔗 Оригинал", url=job['post_url']))
-    if contact_row:
-        kb.append(contact_row)
-        
-    if not is_prem:
-         kb.append([InlineKeyboardButton(text="💎 Купить Премиум", callback_data="buy_premium")])
+    if job.get('contact_url'): contact_row.append(InlineKeyboardButton(text="💬 Написать", url=job['contact_url']))
+    if job.get('post_url'): contact_row.append(InlineKeyboardButton(text="🔗 Оригинал", url=job['post_url']))
+    if contact_row: kb.append(contact_row)
+    if not is_prem: kb.append([InlineKeyboardButton(text="💎 Купить Премиум", callback_data="buy_premium")])
 
     kb.append([InlineKeyboardButton(text="🏠 В меню", callback_data="main_menu")])
-    
-    markup = InlineKeyboardMarkup(inline_keyboard=kb)
-    
     try:
-        await cb.message.edit_text(text, reply_markup=markup, disable_web_page_preview=True)
-    except TelegramBadRequest as e:
-        if "message is not modified" not in str(e):
-            log.warning("edit: %s", e)
+        await cb.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), disable_web_page_preview=True)
+    except TelegramBadRequest: pass
+
+# ---------- Инлайн-режим (Охват) ----------
+@dp.inline_query()
+async def inline_search(query: InlineQuery):
+    jobs = await fetch_feed()
+    results = []
+    search_q = query.query.lower()
+    
+    for i, j in enumerate(jobs[:15]):
+        if search_q and search_q not in j['text'].lower(): continue
+        raw_text = re.sub(r'\n{3,}', '\n\n', j['text'].strip())[:100] + "..."
+        results.append(
+            InlineQueryResultArticle(
+                id=str(i),
+                title=f"Вакансия из @{j['channel']}",
+                description=raw_text,
+                input_message_content=InputTextMessageContent(
+                    message_text=f"💼 <b>Вакансия:</b>\n\n{j['text'][:1000]}",
+                    parse_mode=ParseMode.HTML
+                )
+            )
+        )
+    await query.answer(results, cache_time=60, is_personal=True)
 
 # ---------- Хендлеры ----------
 @dp.message(CommandStart())
 async def start(message: Message):
     uid = message.from_user.id
     is_admin = str(uid) == ADMIN_ID
+    
+    if not await check_sub(uid):
+        await message.answer("👋 <b>Привет!</b>\n\nЧтобы пользоваться ботом, подпишись на наш канал с вакансиями.", reply_markup=get_sub_menu())
+        return
+
     until = await get_premium_until(uid)
     if until is None:
         await add_premium_days(uid, 3)
         if not is_admin:
             try:
                 name = escape(message.from_user.first_name)
-                if message.from_user.username: name += f" (@{message.from_user.username})"
                 await bot.send_message(ADMIN_ID, f"👤 <b>Новый юзер</b>\n{name}\nID: <code>{uid}</code>\n🎁 Триал 3 дня.")
             except Exception: pass
+            
     parts = message.text.split()
     if len(parts) > 1 and parts[1].startswith("ref_"):
         raw = parts[1][4:]
         if raw.isdigit() and await apply_referral(int(raw), uid):
-            try:
-                await bot.send_message(int(raw), f"🎁 По твоей ссылке перешёл {escape(message.from_user.first_name)}! +7 дней.")
+            try: await bot.send_message(int(raw), f"🎁 По твоей ссылке перешёл {escape(message.from_user.first_name)}! +7 дней.")
             except Exception: pass
+            
     await message.answer(
         f"👋 <b>Привет, {escape(message.from_user.first_name)}!</b>\n\n"
-        "<blockquote>🚀 <b>Gig Sniper</b> — твой карманный радар IT-заказов. "
-        "Парсим Telegram 24/7, отсеиваем шлак и выдаем только свежие цели.</blockquote>\n\n"
-        "🎁 Тебе активирован <b>3-дневный Премиум-доступ</b>. Изучай!",
+        "🚀 <b>Gig Sniper</b> — твой радар IT-заказов из Telegram.\n\n"
+        "🎁 Тебе активирован <b>3-дневный Премиум</b>.\n\n"
+        "<i>Совет: напиши @этот_бот в любом чате, чтобы искать вакансии без входа в бота.</i>",
         reply_markup=get_main_menu(is_admin),
     )
+
+@dp.callback_query(F.data == "check_sub")
+async def cb_check_sub(cb: CallbackQuery):
+    if await check_sub(cb.from_user.id):
+        await cb.message.delete()
+        await cb.message.answer("✅ Подписка подтверждена! Жми /start", reply_markup=get_main_menu(str(cb.from_user.id) == ADMIN_ID))
+    else:
+        await cb.answer("❌ Ты всё еще не подписан!", show_alert=True)
 
 @dp.callback_query(F.data == "main_menu")
 async def back_to_menu(cb: CallbackQuery):
@@ -282,26 +350,19 @@ async def show_jobs(cb: CallbackQuery):
     await cb.answer()
 
 @dp.callback_query(F.data == "ignore")
-async def ignore_btn(cb: CallbackQuery):
-    await cb.answer()
+async def ignore_btn(cb: CallbackQuery): await cb.answer()
 
 @dp.callback_query(F.data == "buy_premium")
 async def buy_premium(cb: CallbackQuery):
-    await cb.message.edit_text("💎 <b>Счёт отправлен ниже.</b>\n\nПосле оплаты доступ откроется автоматически.", reply_markup=get_main_menu(str(cb.from_user.id) == ADMIN_ID))
+    await cb.message.edit_text("💎 <b>Счёт отправлен ниже.</b>", reply_markup=get_main_menu(str(cb.from_user.id) == ADMIN_ID))
     await bot.send_invoice(
-        chat_id=cb.from_user.id,
-        title="Премиум доступ (30 дней)",
-        description="Полный доступ к базе вакансий и приоритетная выдача.",
-        payload="premium_30",
-        provider_token="",
-        currency="XTR",
-        prices=[LabeledPrice(label="Доступ", amount=250)],
+        chat_id=cb.from_user.id, title="Премиум (30 дней)", description="Полный доступ к вакансиям.",
+        payload="premium_30", provider_token="", currency="XTR", prices=[LabeledPrice(label="Доступ", amount=250)],
     )
     await cb.answer()
 
 @dp.pre_checkout_query()
-async def pre_checkout(q: PreCheckoutQuery):
-    await q.answer(ok=True)
+async def pre_checkout(q: PreCheckoutQuery): await q.answer(ok=True)
 
 @dp.message(F.successful_payment)
 async def on_paid(message: Message):
@@ -309,38 +370,28 @@ async def on_paid(message: Message):
     try:
         await add_premium_days(message.from_user.id, 30)
         p = await get_pool()
-        async with p.acquire() as c:
-            await c.execute("UPDATE users SET is_paid = TRUE WHERE user_id = $1", message.from_user.id)
-        name = escape(message.from_user.first_name)
-        if message.from_user.username: name += f" (@{message.from_user.username})"
-        await bot.send_message(ADMIN_ID, f"💰 <b>Новая оплата!</b>\nЮзер: {name}\nID: <code>{message.from_user.id}</code>")
-    except Exception as e: log.error("Ошибка: %s", e)
-    await message.answer("✅ <b>Оплата прошла!</b>\nДоступ на 30 дней открыт. Приятной охоты!", reply_markup=get_main_menu(str(message.from_user.id) == ADMIN_ID))
+        async with p.acquire() as c: await c.execute("UPDATE users SET is_paid = TRUE WHERE user_id = $1", message.from_user.id)
+        await bot.send_message(ADMIN_ID, f"💰 <b>Оплата!</b> ID: <code>{message.from_user.id}</code>")
+    except Exception: pass
+    await message.answer("✅ <b>Оплата прошла!</b> Доступ на 30 дней открыт.", reply_markup=get_main_menu(str(message.from_user.id) == ADMIN_ID))
 
 @dp.callback_query(F.data == "invite")
 async def invite(cb: CallbackQuery):
     me = await bot.get_me()
     link = f"https://t.me/{me.username}?start=ref_{cb.from_user.id}"
     await cb.message.edit_text(
-        f"🎁 <b>Партнёрская программа</b>\n\n"
-        f"Приглашай друзей и получай дни Премиума.\n\n"
-        f"Твоя ссылка:\n<code>{link}</code>\n\n"
-        "<blockquote>За каждого друга — <b>+7 дней Премиума</b>.</blockquote>",
+        f"🎁 <b>Партнёрская программа</b>\n\nТвоя ссылка:\n<code>{link}</code>\n\n<blockquote>За каждого друга — <b>+7 дней Премиума</b>.</blockquote>",
         reply_markup=get_main_menu(str(cb.from_user.id) == ADMIN_ID))
     await cb.answer()
 
 @dp.callback_query(F.data == "my_status")
 async def my_status(cb: CallbackQuery):
     uid = str(cb.from_user.id)
-    if uid == ADMIN_ID:
-        text = "👑 <b>Статус:</b> Админ\n<blockquote>Безлимит навсегда.</blockquote>"
+    if uid == ADMIN_ID: text = "👑 <b>Статус:</b> Админ"
     else:
         until = await get_premium_until(cb.from_user.id)
-        if until and until.timestamp() > time.time():
-            days = int((until.timestamp() - time.time()) / 86400)
-            text = f"💎 <b>Статус:</b> Премиум\n<blockquote>Осталось дней: <b>{days}</b></blockquote>"
-        else:
-            text = "👤 <b>Статус:</b> Бесплатный\n<blockquote>Доступно 3 вакансии.</blockquote>"
+        if until and until.timestamp() > time.time(): text = f"💎 <b>Статус:</b> Премиум (Осталось дней: {(int((until.timestamp() - time.time()) / 86400))})"
+        else: text = "👤 <b>Статус:</b> Бесплатный"
     await cb.message.edit_text(text, reply_markup=get_main_menu(uid == ADMIN_ID))
     await cb.answer()
 
@@ -352,24 +403,8 @@ async def admin_panel(cb: CallbackQuery):
         total = await c.fetchval("SELECT COUNT(*) FROM users")
         premium_users = await c.fetch("SELECT user_id, premium_until FROM users WHERE premium_until > NOW() AND is_paid = TRUE")
         trial_users = await c.fetchval("SELECT COUNT(*) FROM users WHERE premium_until > NOW() AND is_paid = FALSE")
-    
     prem_count = len(premium_users)
-    prem_list = ""
-    for u in premium_users:
-        if str(u['user_id']) == ADMIN_ID: continue
-        until_str = u['premium_until'].strftime("%d.%m.%Y")
-        prem_list += f"🔹 <code>{u['user_id']}</code> — до {until_str}\n"
-
-    text = (
-        f"🛠 <b>Админ-панель</b>\n\n"
-        f"👥 Всего юзеров: <b>{total}</b>\n"
-        f"💎 <b>Купивших Премиум: {prem_count}</b>\n"
-        f"🎁 На триале/рефках: <b>{trial_users}</b>\n"
-        f"💰 Реальный доход: <b>{prem_count * 250} ⭐</b>\n\n"
-    )
-    if prem_list: text += f"<b>Список купивших (ID):</b>\n{prem_list}"
-    else: text += "<i>Пока никто не купил.</i>"
-
+    text = f"🛠 <b>Админ-панель</b>\n\n👥 Юзеров: <b>{total}</b>\n💎 Купили: <b>{prem_count}</b>\n🎁 Триал: <b>{trial_users}</b>\n💰 Доход: <b>{prem_count * 250} ⭐</b>\n"
     await cb.message.edit_text(text, reply_markup=get_main_menu(True))
     await cb.answer()
 
@@ -377,9 +412,8 @@ async def admin_panel(cb: CallbackQuery):
 async def clear_fakes(message: Message):
     if str(message.from_user.id) != ADMIN_ID: return
     p = await get_pool()
-    async with p.acquire() as c:
-        await c.execute("UPDATE users SET premium_until = NOW() WHERE is_paid = FALSE")
-    await message.answer("🧹 Все неоплаченные подписки (триалы и рефки) сброшены.")
+    async with p.acquire() as c: await c.execute("UPDATE users SET premium_until = NOW() WHERE is_paid = FALSE")
+    await message.answer("🧹 Фейковые випки сброшены.")
 
 @dp.message(F.text.startswith("/give "))
 async def give_premium(message: Message):
@@ -387,14 +421,14 @@ async def give_premium(message: Message):
     try:
         _, uid, days = message.text.split()
         await add_premium_days(int(uid), int(days))
-        await message.answer(f"✅ Выдал {days} дней юзеру <code>{uid}</code>")
-    except Exception as e:
-        await message.answer(f"❌ Ошибка: {e}\nФормат: <code>/give 123456789 30</code>")
+        await message.answer(f"✅ Выдал {days} дней.")
+    except Exception as e: await message.answer(f"❌ Ошибка: {e}")
 
 # ---------- Запуск ----------
 async def main():
     log.info("init db...")
     await init_db()
+    asyncio.create_task(autopush_worker()) # Запуск рассылки
     log.info("bot started")
     await bot.delete_webhook(drop_pending_updates=False)
     await dp.start_polling(bot)
