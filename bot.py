@@ -20,11 +20,14 @@ DB_FILE = "users.json"
 
 ADMIN_ID = "7183342708"
 MAINTENANCE_MODE = False
+JOBS_PER_PAGE = 5
 
+# --- Утилиты БД ---
 def load_db():
     if os.path.exists(DB_FILE):
-        with open(DB_FILE, "r") as f:
-            return json.load(f)
+        try:
+            with open(DB_FILE, "r") as f: return json.load(f)
+        except: return {}
     return {}
 
 def save_db(db):
@@ -32,16 +35,10 @@ def save_db(db):
         json.dump(db, f)
 
 def has_premium(user_id):
-    if str(user_id) == ADMIN_ID:
-        return True
+    if str(user_id) == ADMIN_ID: return True
     db = load_db()
     uid = str(user_id)
-    if uid in db:
-        if db[uid] > time.time():
-            return True
-        else:
-            del db[uid]
-            save_db(db)
+    if uid in db and db[uid] > time.time(): return True
     return False
 
 # --- Flask для Render ---
@@ -70,105 +67,144 @@ class MaintenanceMiddleware(BaseMiddleware):
 dp.message.middleware(MaintenanceMiddleware())
 dp.callback_query.middleware(MaintenanceMiddleware())
 
-def get_main_menu():
-    kb = [
-        [InlineKeyboardButton(text="🔥 Свежие вакансии", callback_data="show_jobs")],
-        [InlineKeyboardButton(text="💎 Купить Премиум", callback_data="buy_premium")],
-        [InlineKeyboardButton(text="🎁 Пригласить друга", callback_data="invite")],
-        [InlineKeyboardButton(text="📊 Мой статус", callback_data="my_status")],
-        [InlineKeyboardButton(text="📢 Перейти в канал", url="https://t.me/gigsnipervakansii")]
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=kb)
-
+# Безопасное редактирование сообщений
 async def safe_edit(message: Message, text: str, reply_markup=None):
     try:
         await message.edit_text(text, reply_markup=reply_markup, disable_web_page_preview=True)
     except TelegramBadRequest:
         pass 
 
+# --- Клавиатуры ---
+def get_main_menu(is_admin=False):
+    kb = [
+        [InlineKeyboardButton(text="🔥 Свежие вакансии", callback_data="jobs:0")],
+        [InlineKeyboardButton(text="💎 Купить Премиум", callback_data="buy_premium")],
+        [InlineKeyboardButton(text="👤 Мой профиль", callback_data="my_status")],
+        [InlineKeyboardButton(text="🎁 Пригласить друга", callback_data="invite")],
+        [InlineKeyboardButton(text="📢 Наш канал", url="https://t.me/gigsnipervakansii")]
+    ]
+    if is_admin:
+        kb.insert(0, [InlineKeyboardButton(text="🛠 Админ-панель", callback_data="admin_panel")])
+    return InlineKeyboardMarkup(inline_keyboard=kb)
+
+def get_back_button():
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад в меню", callback_data="menu_main")]])
+
+# --- Хендлеры ---
 @dp.message(CommandStart())
 async def start(message: Message):
     db = load_db()
     uid = str(message.from_user.id)
+    is_admin = (uid == ADMIN_ID)
     
-    is_new_user = uid not in db
-    if is_new_user:
+    # Уведомление админу о новом юзере
+    if uid not in db:
         db[uid] = 0
-        if uid != ADMIN_ID:
+        if not is_admin:
             try:
                 user_name = message.from_user.first_name
-                if message.from_user.username:
-                    user_name += f" (@{message.from_user.username})"
+                if message.from_user.username: user_name += f" (@{message.from_user.username})"
                 await bot.send_message(ADMIN_ID, f"👤 <b>Новый пользователь!</b>\nИмя: {user_name}\nID: <code>{uid}</code>")
-            except Exception:
-                pass
-        
+            except: pass
+            
+    # Реферальная система
     args = message.text.split()
     if len(args) > 1 and args[1].startswith("ref_"):
         ref_id = args[1].replace("ref_", "")
         if ref_id.isdigit() and ref_id != uid:
-            if ref_id in db:
-                db[ref_id] += (7 * 86400)
-            else:
-                db[ref_id] = time.time() + (7 * 86400)
-            save_db(db)
-            
-            friend_name = message.from_user.first_name
-            if message.from_user.username:
-                friend_name += f" (@{message.from_user.username})"
+            if ref_id in db: db[ref_id] += (7 * 86400)
+            else: db[ref_id] = time.time() + (7 * 86400)
             try:
-                await bot.send_message(ref_id, f"🎁 По твоей ссылке перешел {friend_name}! Тебе начислено +7 дней Премиума.")
-            except Exception:
-                pass
-    else:
-        save_db(db)
+                await bot.send_message(ref_id, f"🎁 По твоей ссылке перешел {message.from_user.first_name}! Тебе начислено +7 дней Премиума.")
+            except: pass
+    save_db(db)
 
     text = (
-        "<b>Снайпер на позиции. 🎯</b>\n\n"
-        "Радар сканирует мировые биржи каждые 10 минут. Свежие цели (вакансии) уже в прицеле, мусор отсеян.\n\n"
-        "<b>Твои действия:</b>\n"
-        "1️⃣ <b>«🔥 Свежие вакансии»</b> — забрать 3 бесплатных заказа.\n"
-        "2️⃣ <b>«💎 Купить Премиум»</b> — снять лимит и видеть все 30+ целей.\n"
-        "3️⃣ <b>«🎁 Пригласить друга»</b> — получить +7 дней к прицелу бесплатно.\n\n"
-        "Выбирай кнопку ниже. Работаем."
+        f"👋 <b>Привет, {message.from_user.first_name}!</b>\n\n"
+        "🤖 Это <b>Gig Sniper</b> — твой радар свежих IT-заказов и вакансий в удаленке.\n\n"
+        "<blockquote>"
+        "Мы сканируем мировые биржи (RemoteOK, Freelancer) каждые 10 минут, отсеиваем шлак и присылаем только актуальные цели в долларах и рублях."
+        "</blockquote>\n\n"
+        "⚡️ <b>Выбери действие на панели ниже:</b>"
     )
-    await message.answer(text, reply_markup=get_main_menu())
+    await message.answer(text, reply_markup=get_main_menu(is_admin))
 
-@dp.callback_query(F.data == "show_jobs")
+@dp.callback_query(F.data == "menu_main")
+async def back_to_menu(callback: CallbackQuery):
+    is_admin = (str(callback.from_user.id) == ADMIN_ID)
+    text = (
+        f"👋 <b>Главное меню.</b>\n\n"
+        "Твой радар на связи. Выбирай, что будем делать:"
+    )
+    await safe_edit(callback.message, text, reply_markup=get_main_menu(is_admin))
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("jobs:"))
 async def show_jobs(callback: CallbackQuery):
-    await safe_edit(callback.message, "🔄 Загружаю свежие вакансии...")
+    page = int(callback.data.split(":")[1])
     
     try:
         r = requests.get(FEED_URL, timeout=10)
-        jobs = r.json() if r.status_code == 200 else []
+        all_jobs = r.json() if r.status_code == 200 else []
     except Exception:
-        jobs = []
+        all_jobs = []
 
-    if not jobs:
-        await safe_edit(callback.message, "Пока новых вакансий нет. Загляни позже!", reply_markup=get_main_menu())
+    if not all_jobs:
+        await safe_edit(callback.message, "Пока новых вакансий нет. Загляни позже!", reply_markup=get_back_button())
         await callback.answer()
         return
 
     is_premium = has_premium(callback.from_user.id)
-    limit = 10 if is_premium else 3
-    text = "🔥 <b>Свежие вакансии:</b>\n\n"
-    
-    for job in jobs[:limit]:
+    # Бесплатным показываем только первые 3 вакансии, премиум видит все
+    jobs = all_jobs if is_premium else all_jobs[:3]
+
+    total_pages = (len(jobs) - 1) // JOBS_PER_PAGE + 1
+    if page >= total_pages: page = total_pages - 1
+    if page < 0: page = 0
+
+    start_idx = page * JOBS_PER_PAGE
+    end_idx = start_idx + JOBS_PER_PAGE
+    page_jobs = jobs[start_idx:end_idx]
+
+    text = f"🔥 <b>Свежие вакансии</b> (Стр. {page + 1}/{total_pages}):\n\n"
+    kb = []
+
+    for job in page_jobs:
         title = job.get("title", "Без названия")
         company = job.get("company", "Не указана")
         url = job.get("url", "")
-        text += f"▪️ <a href='{url}'>{title}</a>\n🏢 {company}\n\n"
-    
+        sal = ""
+        if job.get("salary_min") or job.get("salary_max"):
+            sal = f"💰 ${job.get('salary_min', 0)} - ${job.get('salary_max', 0)}\n"
+            
+        text += f"▪️ <b>{title}</b>\n🏢 {company}\n{sal}\n"
+        
+        # Кнопка под каждую вакансию
+        btn_text = f"Открыть: {title[:20]}..."
+        kb.append([InlineKeyboardButton(text=btn_text, url=url)])
+
+    # Навигация (листалка)
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"jobs:{page-1}"))
+    if page < total_pages - 1:
+        nav.append(InlineKeyboardButton(text="Ещё ➡️", callback_data=f"jobs:{page+1}"))
+    if nav:
+        kb.append(nav)
+
     if not is_premium:
-        text += f"🔒 <i>Показано {limit} из {len(jobs)} вакансий.</i>\n"
-        text += "💎 Купи Премиум, чтобы видеть их все."
+        text += f"🔒 <i>Показано {len(jobs)} из {len(all_jobs)} вакансий.</i>\n"
+        text += "💎 Купи Премиум, чтобы снять лимит."
+        kb.append([InlineKeyboardButton(text="💎 Купить Премиум", callback_data="buy_premium")])
+        
+    kb.append([InlineKeyboardButton(text="🔙 В главное меню", callback_data="menu_main")])
     
-    await safe_edit(callback.message, text, reply_markup=get_main_menu())
+    await safe_edit(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
     await callback.answer()
 
 @dp.callback_query(F.data == "buy_premium")
 async def buy_premium(callback: CallbackQuery):
-    await safe_edit(callback.message, "💎 <b>Счет на оплату отправлен ниже.</b>\n\nПосле успешной оплаты доступ откроется автоматически. (Чтобы вернуться в меню, напиши /start)", reply_markup=None)
+    await safe_edit(callback.message, "💎 <b>Счет отправлен ниже.</b>\n\nПосле успешной оплаты доступ откроется автоматически. (Для возврата в меню напиши /start)", reply_markup=get_back_button())
     
     await bot.send_invoice(
         chat_id=callback.from_user.id,
@@ -191,44 +227,57 @@ async def on_paid(message: Message):
     uid = str(message.from_user.id)
     db[uid] = time.time() + (30 * 86400)
     save_db(db)
-    await message.answer("✅ <b>Оплата прошла!</b> Доступ открыт на 30 дней. Жми «Свежие вакансии»!", reply_markup=get_main_menu())
+    
+    is_admin = (uid == ADMIN_ID)
+    await message.answer("✅ <b>Оплата прошла!</b> Доступ открыт на 30 дней. Жми «Свежие вакансии»!", reply_markup=get_main_menu(is_admin))
 
 @dp.callback_query(F.data == "invite")
 async def invite(callback: CallbackQuery):
     me = await bot.get_me()
     link = f"https://t.me/{me.username}?start=ref_{callback.from_user.id}"
-    text = f"🎁 <b>Реферальная программа</b>\n\nТвоя ссылка:\n<code>{link}</code>\n\nЗа друга — +7 дней Премиума!"
-    
-    await safe_edit(callback.message, text, reply_markup=get_main_menu())
+    text = (
+        f"🎁 <b>Партнерская программа</b>\n\n"
+        f"Твоя ссылка:\n<code>{link}</code>\n\n"
+        f"<blockquote>За каждого друга, который зайдет по ссылке, ты получаешь <b>+7 дней Премиума</b> бесплатно.</blockquote>"
+    )
+    await safe_edit(callback.message, text, reply_markup=get_back_button())
     await callback.answer()
 
 @dp.callback_query(F.data == "my_status")
 async def my_status(callback: CallbackQuery):
-    if str(callback.from_user.id) == ADMIN_ID:
-        text = "📊 <b>Твой статус:</b> Админ (Премиум навсегда)"
+    uid = str(callback.from_user.id)
+    if uid == ADMIN_ID:
+        text = "👑 <b>Твой статус:</b> Админ\n<blockquote>У тебя безлимитный доступ ко всем функциям навсегда.</blockquote>"
     else:
         db = load_db()
-        uid = str(callback.from_user.id)
         until = db.get(uid, 0)
         
         if until > time.time():
             days_left = int((until - time.time()) / 86400)
-            text = f"📊 <b>Твой статус:</b> Премиум\nОсталось дней: {days_left}"
+            text = f"💎 <b>Твой статус:</b> Премиум\n<blockquote>Осталось дней: <b>{days_left}</b></blockquote>"
         else:
-            text = "📊 <b>Твой статус:</b> Бесплатный\nКупи Премиум, чтобы видеть все вакансии."
+            text = "👤 <b>Твой статус:</b> Бесплатный\n<blockquote>Доступно только 3 вакансии. Купи Премиум, чтобы видеть их все.</blockquote>"
             
-    await safe_edit(callback.message, text, reply_markup=get_main_menu())
+    await safe_edit(callback.message, text, reply_markup=get_back_button())
     await callback.answer()
 
-@dp.message(Command("stats"))
-async def cmd_stats(message: Message):
-    if str(message.from_user.id) != ADMIN_ID:
-        return
+# --- Админ панель ---
+@dp.callback_query(F.data == "admin_panel")
+async def admin_panel(callback: CallbackQuery):
+    if str(callback.from_user.id) != ADMIN_ID: return
     db = load_db()
-    total_users = len(db)
-    premium_users = sum(1 for uid, until in db.items() if until > time.time())
-    text = f"📊 <b>Статистика бота:</b>\n\n👥 Всего пользователей: <b>{total_users}</b>\n💎 С активным Премиумом: <b>{premium_users}</b>"
-    await message.answer(text)
+    total = len(db)
+    premium = sum(1 for uid, until in db.items() if until > time.time())
+    
+    text = (
+        f"🛠 <b>Админ-панель</b>\n\n"
+        f"👥 Всего пользователей: <b>{total}</b>\n"
+        f"💎 Активных подписок: <b>{premium}</b>\n"
+        f"💰 Заработано: <b>{premium * 250} ⭐</b>\n\n"
+        f"<i>База сбрасывается при каждом перезапуске сервера.</i>"
+    )
+    await safe_edit(callback.message, text, reply_markup=get_back_button())
+    await callback.answer()
 
 async def main():
     print("Бот запущен...")
