@@ -1,5 +1,5 @@
 # language: Python 3.11, file: bot.py
-# pip install aiogram==3.20.0 asyncpg==0.30.0 aiohttp==3.11.0 flask==3.1.2 beautifulsoup4==4.12.3
+# pip install aiogram==3.20.0 asyncpg==0.30.0 aiohttp==3.11.0 flask==3.1.2 beautifulsoup4==4.12.3 lxml
 
 import os
 import time
@@ -98,22 +98,41 @@ async def apply_referral(ref_id: int, new_uid: int) -> bool:
             """, ref_id)
             return True
 
-# ---------- Парсер Телеграм-каналов ----------
-# ВПИШИ СЮДА НУЖНЫЕ ПУБЛИЧНЫЕ КАНАЛЫ (без @)
+# ---------- Красивый парсер Телеграм-каналов ----------
 TARGET_CHANNELS = [
     "it_vakansii",
     "forpythonjobs",
     "javascript_jobs",
 ]
 
-# Слова, по которым бот будет отсеивать мусор (оставит только эти темы)
 KEYWORDS = ["python", "react", "frontend", "backend", "разработчик", "верстальщик", "удаленка", "вакансия", "ищу"]
 
 _feed = {"data": None, "ts": 0.0}
 
+def format_vacancy(text: str) -> str:
+    """Очищает и красиво оформляет текст вакансии."""
+    # Убираем лишние пробелы и пустые строки
+    text = re.sub(r'\n{3,}', '\n\n', text.strip())
+    
+    # Делаем первую строку (обычно заголовок) жирной
+    lines = text.split('\n')
+    if lines:
+        lines[0] = f"<b>{lines[0]}</b>"
+    
+    text = '\n'.join(lines)
+    
+    # Если текст слишком длинный, обрезаем и прячем в спойлер для компактности
+    if len(text) > 400:
+        # Берем первые 400 символов для превью
+        preview = text[:400].rsplit(' ', 1)[0] + "..."
+        # Остальное прячем в спойлер
+        remainder = text[400:]
+        return f"{preview}\n\n<tg-spoiler>{remainder}</tg-spoiler>"
+    return text
+
 async def fetch_feed() -> list:
     now = time.time()
-    if _feed["data"] is not None and now - _feed["ts"] < 300: # Кеш на 5 минут
+    if _feed["data"] is not None and now - _feed["ts"] < 300:
         return _feed["data"]
         
     jobs = []
@@ -124,43 +143,35 @@ async def fetch_feed() -> list:
             url = f"https://t.me/s/{channel}"
             try:
                 async with session.get(url, timeout=10) as r:
-                    if r.status != 200:
-                        continue
+                    if r.status != 200: continue
                     html = await r.text()
                     soup = BeautifulSoup(html, 'html.parser')
-                    
                     messages = soup.find_all('div', class_='tgme_widget_message_wrap')
                     
                     for msg in messages:
                         text_div = msg.find('div', class_='tgme_widget_message_text')
-                        if not text_div:
-                            continue
+                        if not text_div: continue
                             
                         text = text_div.get_text(separator='\n').strip()
+                        if not any(kw.lower() in text.lower() for kw in KEYWORDS): continue
                         
-                        # Фильтр по ключевым словам
-                        if not any(kw.lower() in text.lower() for kw in KEYWORDS):
-                            continue
-                            
-                        # Ищем ссылку на юзера для связи
                         match = re.search(r'(?:@|t\.me/)([a-zA-Z0-9_]{5,32})', text)
                         contact_url = f"https://t.me/{match.group(1)}" if match else None
                         
-                        # Достаем ссылку на сам пост в канале
                         link_div = msg.find('a', class_='tgme_widget_message_date')
                         post_url = link_div['href'] if link_div else url
                         
                         jobs.append({
-                            "text": text[:800] + "..." if len(text) > 800 else text,
+                            "text": text,
                             "contact_url": contact_url,
-                            "post_url": post_url
+                            "post_url": post_url,
+                            "channel": channel
                         })
             except Exception as e:
                 log.warning(f"Ошибка парсинга {channel}: {e}")
                 
     jobs = jobs[-20:]
     jobs.reverse() 
-    
     _feed["data"] = jobs
     _feed["ts"] = now
     return jobs
@@ -192,9 +203,8 @@ dp.callback_query.middleware(Maintenance())
 # ---------- Меню ----------
 def get_main_menu(is_admin=False):
     kb = [
-        [InlineKeyboardButton(text="🔥 Свежие вакансии", callback_data="show_jobs")],
-        [InlineKeyboardButton(text="💎 Купить Премиум", callback_data="buy_premium")],
-        [InlineKeyboardButton(text="👤 Мой профиль", callback_data="my_status")],
+        [InlineKeyboardButton(text="🔥 Смотреть вакансии", callback_data="show_jobs")],
+        [InlineKeyboardButton(text="💎 Премиум-доступ", callback_data="buy_premium"), InlineKeyboardButton(text="👤 Профиль", callback_data="my_status")],
         [InlineKeyboardButton(text="🎁 Пригласить друга", callback_data="invite")],
         [InlineKeyboardButton(text="📢 Наш канал", url="https://t.me/gigsnipervakansii")],
     ]
@@ -222,7 +232,7 @@ async def start(message: Message):
             try:
                 name = escape(message.from_user.first_name)
                 if message.from_user.username: name += f" (@{message.from_user.username})"
-                await bot.send_message(ADMIN_ID, f"👤 <b>Новый юзер (3 дня триала)</b>\n{name}\nID: <code>{uid}</code>")
+                await bot.send_message(ADMIN_ID, f"👤 <b>Новый юзер</b>\n{name}\nID: <code>{uid}</code>\n🎁 Триал 3 дня.")
             except Exception: pass
 
     parts = message.text.split()
@@ -235,56 +245,72 @@ async def start(message: Message):
 
     await message.answer(
         f"👋 <b>Привет, {escape(message.from_user.first_name)}!</b>\n\n"
-        "🤖 Это <b>Gig Sniper</b> — радар свежих IT-вакансий и заказов.\n\n"
-        "<blockquote>Сканируем Telegram-каналы каждые 5 минут, отсеиваем шлак, "
-        "присылаем только актуальное.</blockquote>\n\n"
-        "🎁 <b>Тебе активирован 3-дневный Премиум-доступ!</b>\n"
-        "⚡️ <b>Выбери действие:</b>",
+        "<blockquote>🚀 <b>Gig Sniper</b> — твой карманный радар IT-заказов. "
+        "Парсим Telegram 24/7, отсеиваем шлак и выдаем только свежие цели.</blockquote>\n\n"
+        "🎁 Тебе активирован <b>3-дневный Премиум-доступ</b>. Изучай!",
         reply_markup=get_main_menu(is_admin),
     )
 
 @dp.callback_query(F.data == "show_jobs")
 async def show_jobs(cb: CallbackQuery):
-    await safe_edit(cb.message, "🔄 Загружаю свежие вакансии...")
+    await safe_edit(cb.message, "🔄 <i>Сканирую каналы...</i>")
     jobs = await fetch_feed()
     is_admin = str(cb.from_user.id) == ADMIN_ID
 
     if not jobs:
-        await safe_edit(cb.message, "Пока новых нет. Загляни позже!", reply_markup=get_main_menu(is_admin))
+        await safe_edit(cb.message, "😴 Пока новых вакансий нет. Загляни позже!", reply_markup=get_main_menu(is_admin))
         await cb.answer()
         return
 
     is_prem = await has_premium(cb.from_user.id)
     limit = 10 if is_prem else 3
     
-    # Меняем сообщение "Загружаю..." на заголовок
-    await safe_edit(cb.message, f"🔥 <b>Свежие вакансии (показано {min(limit, len(jobs))}):</b>", reply_markup=get_main_menu(is_admin))
+    # Красивый заголовок
+    header = (
+        "✨ <b>СВЕЖИЕ ВАКАНСИИ</b> ✨\n"
+        f"<i>Найдено {len(jobs)} актуальных предложений</i>\n"
+        "━━━━━━━━━━━━━━━━━━"
+    )
+    await safe_edit(cb.message, header, reply_markup=get_main_menu(is_admin))
 
-    # Отправляем каждую вакансию отдельным сообщением с кнопками
-    for j in jobs[:limit]:
+    # Отправляем карточки
+    for i, j in enumerate(jobs[:limit], 1):
         buttons = []
         if j.get('contact_url'):
             buttons.append([InlineKeyboardButton(text="💬 Написать заказчику", url=j['contact_url'])])
         if j.get('post_url'):
-            buttons.append([InlineKeyboardButton(text="🔗 Открыть пост", url=j['post_url'])])
+            buttons.append([InlineKeyboardButton(text="🔗 Оригинал в TG", url=j['post_url'])])
             
         kb = InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
         
-        await cb.message.answer(j['text'], reply_markup=kb, disable_web_page_preview=True)
+        # Форматируем текст
+        clean_text = format_vacancy(j['text'])
+        
+        # Собираем карточку
+        card = (
+            f"<b>#{i} | Из канала @{j['channel']}</b>\n\n"
+            f"{clean_text}"
+        )
+        
+        await cb.message.answer(card, reply_markup=kb, disable_web_page_preview=True)
+        await asyncio.sleep(0.3) # Микро-пауза, чтобы Телеграм не забанил за спам
         
     if not is_prem and len(jobs) > 3:
-        await cb.message.answer("🔒 <i>Показано 3 вакансии из базы.</i>\n💎 Купи Премиум для полного доступа.", reply_markup=get_main_menu(is_admin))
+        await cb.message.answer(
+            f"🔒 <i>Показано 3 из {len(jobs)}.</i>\n\n"
+            "💎 <b>Оформи Премиум</b>, чтобы видеть весь поток заказов без ограничений.",
+            reply_markup=get_main_menu(is_admin)
+        )
     
     await cb.answer()
 
 @dp.callback_query(F.data == "buy_premium")
 async def buy_premium(cb: CallbackQuery):
-    await safe_edit(cb.message, "💎 <b>Счёт отправлен ниже.</b>\n\nПосле оплаты доступ откроется сам.",
-                    reply_markup=get_main_menu(str(cb.from_user.id) == ADMIN_ID))
+    await safe_edit(cb.message, "💎 <b>Счёт отправлен ниже.</b>\n\nПосле оплаты доступ откроется автоматически.", reply_markup=get_main_menu(str(cb.from_user.id) == ADMIN_ID))
     await bot.send_invoice(
         chat_id=cb.from_user.id,
-        title="Премиум доступ",
-        description="Полный доступ к базе вакансий на 30 дней",
+        title="Премиум доступ (30 дней)",
+        description="Полный доступ к базе вакансий и приоритетная выдача.",
         payload="premium_30",
         provider_token="",
         currency="XTR",
@@ -298,25 +324,24 @@ async def pre_checkout(q: PreCheckoutQuery):
 
 @dp.message(F.successful_payment)
 async def on_paid(message: Message):
-    if message.successful_payment.invoice_payload != "premium_30":
-        return
+    if message.successful_payment.invoice_payload != "premium_30": return
     try:
         await add_premium_days(message.from_user.id, 30)
         name = escape(message.from_user.first_name)
         if message.from_user.username: name += f" (@{message.from_user.username})"
         await bot.send_message(ADMIN_ID, f"💰 <b>Новая оплата!</b>\nЮзер: {name}\nID: <code>{message.from_user.id}</code>")
-    except Exception as e:
-        log.error("Ошибка при начислении: %s", e)
+    except Exception as e: log.error("Ошибка: %s", e)
         
-    await message.answer("✅ <b>Оплата прошла!</b> Доступ на 30 дней открыт.",
-                         reply_markup=get_main_menu(str(message.from_user.id) == ADMIN_ID))
+    await message.answer("✅ <b>Оплата прошла!</b>\nДоступ на 30 дней открыт. Приятной охоты!", reply_markup=get_main_menu(str(message.from_user.id) == ADMIN_ID))
 
 @dp.callback_query(F.data == "invite")
 async def invite(cb: CallbackQuery):
     me = await bot.get_me()
     link = f"https://t.me/{me.username}?start=ref_{cb.from_user.id}"
     await safe_edit(cb.message,
-        f"🎁 <b>Партнёрская программа</b>\n\nТвоя ссылка:\n<code>{link}</code>\n\n"
+        f"🎁 <b>Партнёрская программа</b>\n\n"
+        f"Приглашай друзей и получай дни Премиума.\n\n"
+        f"Твоя ссылка:\n<code>{link}</code>\n\n"
         "<blockquote>За каждого друга — <b>+7 дней Премиума</b>.</blockquote>",
         reply_markup=get_main_menu(str(cb.from_user.id) == ADMIN_ID))
     await cb.answer()
@@ -357,10 +382,8 @@ async def admin_panel(cb: CallbackQuery):
         f"💎 Активных подписок: <b>{prem_count}</b>\n"
         f"💰 Доход: <b>{prem_count * 250} ⭐</b>\n\n"
     )
-    if prem_list:
-        text += f"<b>Список купивших (ID):</b>\n{prem_list}"
-    else:
-        text += "<i>Пока никто не купил.</i>"
+    if prem_list: text += f"<b>Список купивших (ID):</b>\n{prem_list}"
+    else: text += "<i>Пока никто не купил.</i>"
 
     await safe_edit(cb.message, text, reply_markup=get_main_menu(True))
     await cb.answer()
