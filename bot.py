@@ -35,15 +35,16 @@ ADMIN_ID = "7183342708"
 CHANNEL_ID = "@gigsnipervakansii"
 CHANNEL_URL = "https://t.me/gigsnipervakansii"
 
-# Глобальный флаг для быстрой проверки
 IS_MAINTENANCE = False
 
-# ---------- Состояния (FSM) для админки ----------
 class AdminStates(StatesGroup):
     give_id = State()
     give_days = State()
     add_channel = State()
     del_channel = State()
+
+class UserStates(StatesGroup):
+    waiting_for_filter = State()
 
 # ---------- База ----------
 _pool: asyncpg.Pool | None = None
@@ -62,9 +63,11 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS users (
                 user_id BIGINT PRIMARY KEY,
                 premium_until TIMESTAMP WITH TIME ZONE,
-                is_paid BOOLEAN DEFAULT FALSE
+                is_paid BOOLEAN DEFAULT FALSE,
+                filter_word VARCHAR(255) DEFAULT NULL
             );
             ALTER TABLE users ADD COLUMN IF NOT EXISTS is_paid BOOLEAN DEFAULT FALSE;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS filter_word VARCHAR(255) DEFAULT NULL;
             
             CREATE TABLE IF NOT EXISTS referrals (
                 referrer BIGINT NOT NULL,
@@ -108,6 +111,12 @@ async def get_premium_until(user_id: int):
     async with p.acquire() as c:
         row = await c.fetchrow("SELECT premium_until FROM users WHERE user_id = $1", user_id)
     return row["premium_until"] if row else None
+
+async def get_user_filter(user_id: int):
+    p = await get_pool()
+    async with p.acquire() as c:
+        row = await c.fetchrow("SELECT filter_word FROM users WHERE user_id = $1", user_id)
+    return row["filter_word"] if row else None
 
 async def add_premium_days(user_id: int, days: int):
     p = await get_pool()
@@ -156,7 +165,8 @@ async def apply_referral(ref_id: int, new_uid: int) -> bool:
 REQUIRED_WORDS = ["python", "react", "frontend", "backend", "разработчик", "верстальщик", "удаленка", "вакансия", "ищу", "требуется", "looking for", "hiring"]
 STOP_WORDS = ["курс", "промокод", "скидка", "подпишись", "реклама", "инфобизнес", "наставничество", "база", "слив", "обучение", "заработок", "доход", "крипт", "бесплатно", "лайфхак", "марафон", "вебинар"]
 
-_feed = {"data": None, "ts": 0.0, "last_sent_id": None}
+_feed = {"data": None, "ts": 0.0}
+_feed_lock = asyncio.Lock() # Защита от спама парсером (Thundering Herd)
 
 def is_valid_job(text: str) -> bool:
     text_lower = text.lower()
@@ -167,69 +177,85 @@ def is_valid_job(text: str) -> bool:
     return True
 
 async def fetch_feed() -> list:
-    now = time.time()
-    if _feed["data"] is not None and now - _feed["ts"] < 300:
-        return _feed["data"]
+    async with _feed_lock:
+        now = time.time()
+        if _feed["data"] is not None and now - _feed["ts"] < 300:
+            return _feed["data"]
+            
+        jobs = []
+        headers = {"User-Agent": "Mozilla/5.0"}
+        channels = await get_channels()
         
-    jobs = []
-    headers = {"User-Agent": "Mozilla/5.0"}
-    channels = await get_channels()
-    
-    async with aiohttp.ClientSession(headers=headers) as session:
-        for channel in channels:
-            url = f"https://t.me/s/{channel}"
-            try:
-                async with session.get(url, timeout=10) as r:
-                    if r.status != 200: continue
-                    html = await r.text()
-                    soup = BeautifulSoup(html, 'html.parser')
-                    messages = soup.find_all('div', class_='tgme_widget_message_wrap')
-                    for msg in messages:
-                        text_div = msg.find('div', class_='tgme_widget_message_text')
-                        if not text_div: continue
-                        text = text_div.get_text(separator='\n').strip()
-                        if not is_valid_job(text): continue
-                        match = re.search(r'(?:@|t\.me/)([a-zA-Z0-9_]{5,32})', text)
-                        contact_url = f"https://t.me/{match.group(1)}" if match else None
-                        link_div = msg.find('a', class_='tgme_widget_message_date')
-                        post_url = link_div['href'] if link_div else url
-                        jobs.append({"text": text, "contact_url": contact_url, "post_url": post_url, "channel": channel})
-            except Exception as e:
-                log.warning(f"Ошибка парсинга {channel}: {e}")
-                
-    jobs = jobs[-20:]
-    jobs.reverse()
-    _feed["data"] = jobs
-    _feed["ts"] = now
-    return jobs
+        async with aiohttp.ClientSession(headers=headers) as session:
+            for channel in channels:
+                url = f"https://t.me/s/{channel}"
+                try:
+                    async with session.get(url, timeout=10) as r:
+                        if r.status != 200: continue
+                        html = await r.text()
+                        soup = BeautifulSoup(html, 'html.parser')
+                        messages = soup.find_all('div', class_='tgme_widget_message_wrap')
+                        for msg in messages:
+                            text_div = msg.find('div', class_='tgme_widget_message_text')
+                            if not text_div: continue
+                            text = text_div.get_text(separator='\n').strip()
+                            if not is_valid_job(text): continue
+                            match = re.search(r'(?:@|t\.me/)([a-zA-Z0-9_]{5,32})', text)
+                            contact_url = f"https://t.me/{match.group(1)}" if match else None
+                            link_div = msg.find('a', class_='tgme_widget_message_date')
+                            post_url = link_div['href'] if link_div else url
+                            jobs.append({"text": text, "contact_url": contact_url, "post_url": post_url, "channel": channel})
+                except Exception as e:
+                    log.warning(f"Ошибка парсинга {channel}: {e}")
+                    
+        jobs = jobs[-50:] 
+        jobs.reverse()
+        _feed["data"] = jobs
+        _feed["ts"] = now
+        return jobs
 
 # ---------- Авторассылка ----------
 async def autopush_worker():
     await asyncio.sleep(10)
-    bot_me = await bot.get_me()
     while True:
         try:
+            bot_me = await bot.get_me()
             if not IS_MAINTENANCE:
                 jobs = await fetch_feed()
                 if jobs:
                     latest_job = jobs[0]
-                    if _feed["last_sent_id"] != latest_job['post_url']:
-                        _feed["last_sent_id"] = latest_job['post_url']
-                        p = await get_pool()
+                    
+                    p = await get_pool()
+                    async with p.acquire() as c:
+                        last_sent_id = await c.fetchval("SELECT value FROM settings WHERE key = 'last_pushed'")
+                    
+                    if last_sent_id != latest_job['post_url']:
                         async with p.acquire() as c:
                             users = await c.fetch("SELECT user_id FROM users WHERE premium_until > NOW()")
+                        
                         raw_text = re.sub(r'\n{3,}', '\n\n', latest_job['text'].strip())
                         if len(raw_text) > 400: raw_text = raw_text[:400] + "..."
                         push_text = f"🚨 <b>СВЕЖАЯ ВАКАНСИЯ!</b>\n\n{escape(raw_text)}"
                         kb = InlineKeyboardMarkup(inline_keyboard=[[
                             InlineKeyboardButton(text="🔥 Открыть в боте", url=f"https://t.me/{bot_me.username}?start=push")
                         ]])
+                        
+                        success_count = 0
                         for u in users:
                             if str(u['user_id']) == ADMIN_ID: continue
                             try:
                                 await bot.send_message(u['user_id'], push_text, reply_markup=kb, disable_web_page_preview=True)
+                                success_count += 1
                                 await asyncio.sleep(0.05)
                             except Exception: pass
+                        
+                        if success_count > 0:
+                            async with p.acquire() as c:
+                                await c.execute("""
+                                    INSERT INTO settings (key, value) VALUES ('last_pushed', $1)
+                                    ON CONFLICT (key) DO UPDATE SET value = $1
+                                """, latest_job['post_url'])
+                            
         except Exception as e:
             log.error(f"Autopush error: {e}")
         await asyncio.sleep(300)
@@ -247,20 +273,31 @@ dp = Dispatcher()
 
 class MaintenanceMiddleware(BaseMiddleware):
     async def __call__(self, handler, event: TelegramObject, data: dict):
-        if IS_MAINTENANCE and isinstance(event, (Message, CallbackQuery)):
-            if event.from_user and str(event.from_user.id) == ADMIN_ID:
+        if IS_MAINTENANCE:
+            if hasattr(event, 'from_user') and event.from_user and str(event.from_user.id) == ADMIN_ID:
                 return await handler(event, data)
+                
             if isinstance(event, Message):
                 await event.answer("🛠 <b>Бот на техническом обслуживании.</b>\n\nМы обновляем базу вакансий. Зайдите чуть позже!")
             elif isinstance(event, CallbackQuery):
                 await event.answer("🛠 Бот на тех. обслуживании.", show_alert=True)
+            elif isinstance(event, InlineQuery):
+                await event.answer([], cache_time=0, is_personal=True)
             return
         return await handler(event, data)
 
 dp.message.middleware(MaintenanceMiddleware())
 dp.callback_query.middleware(MaintenanceMiddleware())
+dp.inline_query.middleware(MaintenanceMiddleware())
 
-# ---------- Меню ----------
+# ---------- Хелперы и Меню ----------
+async def safe_edit(message: Message, text: str, reply_markup=None):
+    try:
+        await message.edit_text(text, reply_markup=reply_markup, disable_web_page_preview=True)
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            log.warning("edit: %s", e)
+
 def get_main_menu(is_admin=False):
     kb = [
         [InlineKeyboardButton(text="🔥 Смотреть вакансии", callback_data="show_jobs:0")],
@@ -292,7 +329,12 @@ def get_cancel_menu():
         [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_panel")]
     ])
 
-# ---------- Логика Панели Админа ----------
+def get_user_cancel_menu():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Назад к вакансиям", callback_data="show_jobs:0")]
+    ])
+
+# ---------- Отрисовки ----------
 async def render_admin_panel(cb: CallbackQuery, state: FSMContext | None = None):
     if state: await state.clear()
     if str(cb.from_user.id) != ADMIN_ID: return
@@ -319,23 +361,31 @@ async def render_admin_panel(cb: CallbackQuery, state: FSMContext | None = None)
         f"📡 <b>Каналы в парсере:</b>\n<code>{ch_list}</code>\n\n"
         "<i>Выбери действие на панели ниже:</i>"
     )
-    try:
-        await cb.message.edit_text(text, reply_markup=get_admin_menu())
-    except TelegramBadRequest: pass
+    await safe_edit(cb.message, text, get_admin_menu())
 
-# ---------- Карточки ----------
 async def render_job(cb: CallbackQuery, index: int):
     if not await check_sub(cb.from_user.id):
-        await cb.message.edit_text("⚠️ <b>Для доступа к вакансиям подпишись на наш канал!</b>", reply_markup=get_sub_menu())
+        await safe_edit(cb.message, "⚠️ <b>Для доступа к вакансиям подпишись на наш канал!</b>", get_sub_menu())
         return
 
     jobs = await fetch_feed()
     is_prem = await has_premium(cb.from_user.id)
+    
+    user_filter = None
+    if is_prem:
+        user_filter = await get_user_filter(cb.from_user.id)
+        if user_filter:
+            jobs = [j for j in jobs if user_filter.lower() in j['text'].lower()]
+
     limit = 10 if is_prem else 3
     jobs = jobs[:limit]
     
     if not jobs:
-        await cb.message.edit_text("😴 Пока новых вакансий нет.", reply_markup=get_main_menu(str(cb.from_user.id) == ADMIN_ID))
+        text = "😴 Пока новых вакансий нет."
+        if user_filter:
+            safe_f = escape(user_filter)
+            text = f"😴 По фильтру <b>'{safe_f}'</b> пока ничего нет.\nПопробуй сбросить фильтр."
+        await safe_edit(cb.message, text, get_main_menu(str(cb.from_user.id) == ADMIN_ID))
         return
 
     index = max(0, min(index, len(jobs) - 1))
@@ -359,32 +409,47 @@ async def render_job(cb: CallbackQuery, index: int):
     if job.get('contact_url'): contact_row.append(InlineKeyboardButton(text="💬 Написать", url=job['contact_url']))
     if job.get('post_url'): contact_row.append(InlineKeyboardButton(text="🔗 Оригинал", url=job['post_url']))
     if contact_row: kb.append(contact_row)
-    if not is_prem: kb.append([InlineKeyboardButton(text="💎 Купить Премиум", callback_data="buy_premium")])
+    
+    if is_prem:
+        f_text = f"⚙️ Фильтр: {escape(user_filter)}" if user_filter else "⚙️ Фильтры"
+        kb.append([InlineKeyboardButton(text=f_text, callback_data="user_filters")])
+    else:
+        kb.append([InlineKeyboardButton(text="💎 Купить Премиум", callback_data="buy_premium")])
 
     kb.append([InlineKeyboardButton(text="🏠 В меню", callback_data="main_menu")])
-    try:
-        await cb.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), disable_web_page_preview=True)
-    except TelegramBadRequest: pass
+    await safe_edit(cb.message, text, InlineKeyboardMarkup(inline_keyboard=kb))
 
 # ---------- Инлайн ----------
 @dp.inline_query()
 async def inline_search(query: InlineQuery):
-    jobs = await fetch_feed()
-    results = []
-    search_q = query.query.lower()
-    
-    for i, j in enumerate(jobs[:15]):
-        if search_q and search_q not in j['text'].lower(): continue
-        raw_text = re.sub(r'\n{3,}', '\n\n', j['text'].strip())[:100] + "..."
-        safe_desc = escape(raw_text)
-        safe_content = escape(j['text'][:1000])
-        results.append(
-            InlineQueryResultArticle(
-                id=str(i), title=f"Вакансия из @{j['channel']}", description=safe_desc,
-                input_message_content=InputTextMessageContent(message_text=f"💼 <b>Вакансия:</b>\n\n{safe_content}", parse_mode=ParseMode.HTML)
+    try:
+        jobs = await fetch_feed()
+        results = []
+        search_q = query.query.lower()
+        
+        for i, j in enumerate(jobs[:15]):
+            if search_q and search_q not in j['text'].lower(): continue
+            raw_text = re.sub(r'\n{3,}', '\n\n', j['text'].strip())[:100] + "..."
+            safe_desc = escape(raw_text)
+            safe_content = escape(j['text'][:1000])
+            results.append(
+                InlineQueryResultArticle(
+                    id=str(i), title=f"Вакансия из @{j['channel']}", description=safe_desc,
+                    input_message_content=InputTextMessageContent(message_text=f"💼 <b>Вакансия:</b>\n\n{safe_content}", parse_mode=ParseMode.HTML)
+                )
             )
-        )
-    await query.answer(results, cache_time=60, is_personal=True)
+        await query.answer(results, cache_time=60, is_personal=True)
+    except TelegramBadRequest:
+        pass
+
+# ---------- Глобальные команды ----------
+@dp.message(Command("cancel"))
+async def cancel_handler(message: Message, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state is None:
+        return
+    await state.clear()
+    await message.answer("❌ Действие отменено.", reply_markup=get_main_menu(str(message.from_user.id) == ADMIN_ID))
 
 # ---------- Хендлеры ----------
 @dp.message(CommandStart())
@@ -432,25 +497,76 @@ async def cb_check_sub(cb: CallbackQuery):
 @dp.callback_query(F.data == "main_menu")
 async def back_to_menu(cb: CallbackQuery, state: FSMContext):
     await state.clear()
-    await cb.message.edit_text("⚡️ <b>Главное меню:</b>", reply_markup=get_main_menu(str(cb.from_user.id) == ADMIN_ID))
+    await safe_edit(cb.message, "⚡️ <b>Главное меню:</b>", get_main_menu(str(cb.from_user.id) == ADMIN_ID))
     await cb.answer()
 
 @dp.callback_query(F.data.startswith("show_jobs:"))
-async def show_jobs(cb: CallbackQuery):
+async def show_jobs(cb: CallbackQuery, state: FSMContext):
+    await state.clear()
     index = int(cb.data.split(":")[1])
     if index == 0 and not cb.message.text.startswith("💼"):
-        await cb.message.edit_text("🔄 <i>Сканирую каналы...</i>")
+        await safe_edit(cb.message, "🔄 <i>Сканирую каналы...</i>")
     await render_job(cb, index)
     await cb.answer()
 
 @dp.callback_query(F.data == "ignore")
 async def ignore_btn(cb: CallbackQuery): await cb.answer()
 
+# ---------- Фильтры ----------
+@dp.callback_query(F.data == "user_filters")
+async def show_filters(cb: CallbackQuery, state: FSMContext):
+    if not await has_premium(cb.from_user.id):
+        await cb.answer("Фильтры доступны только с Премиумом!", show_alert=True)
+        return
+        
+    current_filter = await get_user_filter(cb.from_user.id)
+    f_text = f"<b>{escape(current_filter)}</b>" if current_filter else "<i>Не задан</i>"
+    
+    await state.set_state(UserStates.waiting_for_filter)
+    await safe_edit(cb.message,
+        "⚙️ <b>Настройка фильтра</b>\n\n"
+        f"Текущий фильтр: {f_text}\n\n"
+        "Отправь мне слово или фразу, и бот будет показывать только те вакансии, где оно встречается (например, <code>python</code> или <code>react</code>).\n\n"
+        "Чтобы <b>удалить</b> фильтр, отправь знак <code>-</code>.",
+        get_user_cancel_menu()
+    )
+    await cb.answer()
+
+@dp.message(UserStates.waiting_for_filter)
+async def set_filter(message: Message, state: FSMContext):
+    if not await has_premium(message.from_user.id):
+        await state.clear()
+        await message.answer("У тебя закончился Премиум. Купи подписку для использования фильтров.", reply_markup=get_main_menu(str(message.from_user.id) == ADMIN_ID))
+        return
+        
+    # Отсекаем команды
+    if not message.text or message.text.startswith('/'):
+        await state.clear()
+        await message.answer("❌ Отменено.", reply_markup=get_user_cancel_menu())
+        return
+    
+    word = message.text.strip()[:50]
+    if word == "-" or word == "":
+        word = None
+        
+    p = await get_pool()
+    async with p.acquire() as c:
+        await c.execute("UPDATE users SET filter_word = $1 WHERE user_id = $2", word, message.from_user.id)
+        
+    await state.clear()
+    
+    if word:
+        safe_w = escape(word)
+        await message.answer(f"✅ Фильтр установлен: <b>{safe_w}</b>", reply_markup=get_user_cancel_menu())
+    else:
+        await message.answer("✅ Фильтр сброшен. Показываю все вакансии.", reply_markup=get_user_cancel_menu())
+
+# ---------- Оплата ----------
 @dp.callback_query(F.data == "buy_premium")
 async def buy_premium(cb: CallbackQuery):
-    await cb.message.edit_text("💎 <b>Счёт отправлен ниже.</b>", reply_markup=get_main_menu(str(cb.from_user.id) == ADMIN_ID))
+    await safe_edit(cb.message, "💎 <b>Счёт отправлен ниже.</b>", get_main_menu(str(cb.from_user.id) == ADMIN_ID))
     await bot.send_invoice(
-        chat_id=cb.from_user.id, title="Премиум (30 дней)", description="Полный доступ к вакансиям.",
+        chat_id=cb.from_user.id, title="Премиум (30 дней)", description="Полный доступ к вакансиям и фильтрам.",
         payload="premium_30", provider_token="", currency="XTR", prices=[LabeledPrice(label="Доступ", amount=250)],
     )
     await cb.answer()
@@ -473,9 +589,9 @@ async def on_paid(message: Message):
 async def invite(cb: CallbackQuery):
     me = await bot.get_me()
     link = f"https://t.me/{me.username}?start=ref_{cb.from_user.id}"
-    await cb.message.edit_text(
+    await safe_edit(cb.message,
         f"🎁 <b>Партнёрская программа</b>\n\nТвоя ссылка:\n<code>{link}</code>\n\n<blockquote>За каждого друга — <b>+7 дней Премиума</b>.</blockquote>",
-        reply_markup=get_main_menu(str(cb.from_user.id) == ADMIN_ID))
+        get_main_menu(str(cb.from_user.id) == ADMIN_ID))
     await cb.answer()
 
 @dp.callback_query(F.data == "my_status")
@@ -486,7 +602,7 @@ async def my_status(cb: CallbackQuery):
         until = await get_premium_until(cb.from_user.id)
         if until and until.timestamp() > time.time(): text = f"💎 <b>Статус:</b> Премиум (Осталось дней: {(int((until.timestamp() - time.time()) / 86400))})"
         else: text = "👤 <b>Статус:</b> Бесплатный"
-    await cb.message.edit_text(text, reply_markup=get_main_menu(uid == ADMIN_ID))
+    await safe_edit(cb.message, text, get_main_menu(uid == ADMIN_ID))
     await cb.answer()
 
 # ---------- Админ-панель и Кнопки ----------
@@ -515,17 +631,18 @@ async def toggle_maint(cb: CallbackQuery):
 async def admin_give_start(cb: CallbackQuery, state: FSMContext):
     if str(cb.from_user.id) != ADMIN_ID: return
     await state.set_state(AdminStates.give_id)
-    await cb.message.edit_text(
+    await safe_edit(cb.message,
         "💎 <b>Выдача Премиума</b>\n\n"
-        "Отправь мне <b>ID пользователя</b>, которому нужно начислить дни.",
-        reply_markup=get_cancel_menu()
+        "Отправь мне <b>ID пользователя</b>, которому нужно начислить дни.\n\n"
+        "<i>Чтобы отменить, отправь /cancel</i>",
+        get_cancel_menu()
     )
     await cb.answer()
 
 @dp.message(AdminStates.give_id)
 async def admin_give_days_input(message: Message, state: FSMContext):
     if str(message.from_user.id) != ADMIN_ID: return
-    if not message.text.isdigit():
+    if not message.text or not message.text.isdigit():
         await message.answer("❌ ID должен состоять только из цифр. Попробуй еще раз:", reply_markup=get_cancel_menu())
         return
     await state.update_data(target_uid=int(message.text))
@@ -539,13 +656,17 @@ async def admin_give_days_input(message: Message, state: FSMContext):
 @dp.message(AdminStates.give_days)
 async def admin_give_days_finish(message: Message, state: FSMContext):
     if str(message.from_user.id) != ADMIN_ID: return
-    if not message.text.isdigit():
+    if not message.text or not message.text.isdigit():
         await message.answer("❌ Дни должны быть числом. Попробуй еще раз:", reply_markup=get_cancel_menu())
         return
     
+    days = int(message.text)
+    if days <= 0:
+        await message.answer("❌ Дни должны быть больше нуля. Попробуй еще раз:", reply_markup=get_cancel_menu())
+        return
+        
     data = await state.get_data()
     target_uid = data['target_uid']
-    days = int(message.text)
     
     await add_premium_days(target_uid, days)
     await state.clear()
@@ -560,7 +681,7 @@ async def admin_clear_fakes(cb: CallbackQuery):
     if str(cb.from_user.id) != ADMIN_ID: return
     p = await get_pool()
     async with p.acquire() as c: 
-        await c.execute("UPDATE users SET premium_until = NOW() WHERE is_paid = FALSE")
+        await c.execute("UPDATE users SET premium_until = NOW(), filter_word = NULL WHERE is_paid = FALSE")
     await cb.answer("🧹 Все неоплаченные подписки сброшены!", show_alert=True)
     await render_admin_panel(cb)
 
@@ -568,17 +689,23 @@ async def admin_clear_fakes(cb: CallbackQuery):
 async def admin_add_ch_start(cb: CallbackQuery, state: FSMContext):
     if str(cb.from_user.id) != ADMIN_ID: return
     await state.set_state(AdminStates.add_channel)
-    await cb.message.edit_text(
+    await safe_edit(cb.message,
         "➕ <b>Добавление канала</b>\n\n"
-        "Отправь мне юзернейм канала (можно с @ или ссылкой).",
-        reply_markup=get_cancel_menu()
+        "Отправь мне юзернейм канала (можно с @ или ссылкой).\n\n"
+        "<i>Чтобы отменить, отправь /cancel</i>",
+        get_cancel_menu()
     )
     await cb.answer()
 
 @dp.message(AdminStates.add_channel)
 async def admin_add_ch_finish(message: Message, state: FSMContext):
     if str(message.from_user.id) != ADMIN_ID: return
-    clean_name = message.text.replace("https://t.me/", "").replace("@", "").strip()
+    if not message.text or message.text.startswith('/'):
+        await state.clear()
+        await message.answer("❌ Отменено. Возврат в меню.", reply_markup=get_admin_menu())
+        return
+        
+    clean_name = message.text.replace("https://t.me/", "").replace("@", "").strip()[:100]
     
     p = await get_pool()
     async with p.acquire() as c:
@@ -594,16 +721,22 @@ async def admin_add_ch_finish(message: Message, state: FSMContext):
 async def admin_del_ch_start(cb: CallbackQuery, state: FSMContext):
     if str(cb.from_user.id) != ADMIN_ID: return
     await state.set_state(AdminStates.del_channel)
-    await cb.message.edit_text(
+    await safe_edit(cb.message,
         "🗑 <b>Удаление канала</b>\n\n"
-        "Отправь мне юзернейм канала, который нужно убрать.",
-        reply_markup=get_cancel_menu()
+        "Отправь мне юзернейм канала, который нужно убрать.\n\n"
+        "<i>Чтобы отменить, отправь /cancel</i>",
+        get_cancel_menu()
     )
     await cb.answer()
 
 @dp.message(AdminStates.del_channel)
 async def admin_del_ch_finish(message: Message, state: FSMContext):
     if str(message.from_user.id) != ADMIN_ID: return
+    if not message.text or message.text.startswith('/'):
+        await state.clear()
+        await message.answer("❌ Отменено. Возврат в меню.", reply_markup=get_admin_menu())
+        return
+        
     clean_name = message.text.replace("https://t.me/", "").replace("@", "").strip()
     
     p = await get_pool()
