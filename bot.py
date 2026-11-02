@@ -22,6 +22,8 @@ from aiogram.filters import CommandStart, Command
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("bot")
@@ -30,10 +32,18 @@ TOKEN = os.environ.get("BOT_TOKEN")
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 ADMIN_ID = "7183342708"
-MAINTENANCE_MODE = False
-
 CHANNEL_ID = "@gigsnipervakansii"
 CHANNEL_URL = "https://t.me/gigsnipervakansii"
+
+# Глобальный флаг для быстрой проверки
+IS_MAINTENANCE = False
+
+# ---------- Состояния (FSM) для админки ----------
+class AdminStates(StatesGroup):
+    give_id = State()
+    give_days = State()
+    add_channel = State()
+    del_channel = State()
 
 # ---------- База ----------
 _pool: asyncpg.Pool | None = None
@@ -45,6 +55,7 @@ async def get_pool() -> asyncpg.Pool:
     return _pool
 
 async def init_db():
+    global IS_MAINTENANCE
     p = await get_pool()
     async with p.acquire() as c:
         await c.execute("""
@@ -65,14 +76,26 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS channels (
                 name VARCHAR(255) PRIMARY KEY
             );
+            
+            CREATE TABLE IF NOT EXISTS settings (
+                key VARCHAR(50) PRIMARY KEY,
+                value VARCHAR(50)
+            );
         """)
-        # Добавляем дефолтные каналы, если таблица пустая
+        
         count = await c.fetchval("SELECT COUNT(*) FROM channels")
         if count == 0:
             await c.execute("""
                 INSERT INTO channels (name) VALUES 
                 ('it_vakansii_jobs'), ('remote_it_jobs'), ('python_jobs')
             """)
+            
+        maint_val = await c.fetchval("SELECT value FROM settings WHERE key = 'maintenance'")
+        if maint_val is None:
+            await c.execute("INSERT INTO settings (key, value) VALUES ('maintenance', '0')")
+            IS_MAINTENANCE = False
+        else:
+            IS_MAINTENANCE = (maint_val == '1')
 
 async def get_channels() -> list:
     p = await get_pool()
@@ -130,9 +153,18 @@ async def apply_referral(ref_id: int, new_uid: int) -> bool:
             return True
 
 # ---------- Парсер ----------
-KEYWORDS = ["python", "react", "frontend", "backend", "разработчик", "верстальщик", "удаленка", "вакансия", "ищу"]
+REQUIRED_WORDS = ["python", "react", "frontend", "backend", "разработчик", "верстальщик", "удаленка", "вакансия", "ищу", "требуется", "looking for", "hiring"]
+STOP_WORDS = ["курс", "промокод", "скидка", "подпишись", "реклама", "инфобизнес", "наставничество", "база", "слив", "обучение", "заработок", "доход", "крипт", "бесплатно", "лайфхак", "марафон", "вебинар"]
 
 _feed = {"data": None, "ts": 0.0, "last_sent_id": None}
+
+def is_valid_job(text: str) -> bool:
+    text_lower = text.lower()
+    if len(text_lower) < 50 or len(text_lower) > 4000: return False
+    if any(sw in text_lower for sw in STOP_WORDS): return False
+    if not any(rw in text_lower for rw in REQUIRED_WORDS): return False
+    if not re.search(r'(?:@|t\.me/)([a-zA-Z0-9_]{5,32})', text): return False
+    return True
 
 async def fetch_feed() -> list:
     now = time.time()
@@ -156,7 +188,7 @@ async def fetch_feed() -> list:
                         text_div = msg.find('div', class_='tgme_widget_message_text')
                         if not text_div: continue
                         text = text_div.get_text(separator='\n').strip()
-                        if not any(kw.lower() in text.lower() for kw in KEYWORDS): continue
+                        if not is_valid_job(text): continue
                         match = re.search(r'(?:@|t\.me/)([a-zA-Z0-9_]{5,32})', text)
                         contact_url = f"https://t.me/{match.group(1)}" if match else None
                         link_div = msg.find('a', class_='tgme_widget_message_date')
@@ -174,32 +206,30 @@ async def fetch_feed() -> list:
 # ---------- Авторассылка ----------
 async def autopush_worker():
     await asyncio.sleep(10)
+    bot_me = await bot.get_me()
     while True:
         try:
-            jobs = await fetch_feed()
-            if jobs:
-                latest_job = jobs[0]
-                if _feed["last_sent_id"] != latest_job['post_url']:
-                    _feed["last_sent_id"] = latest_job['post_url']
-                    
-                    p = await get_pool()
-                    async with p.acquire() as c:
-                        users = await c.fetch("SELECT user_id FROM users WHERE premium_until > NOW()")
-                    
-                    raw_text = re.sub(r'\n{3,}', '\n\n', latest_job['text'].strip())
-                    if len(raw_text) > 400: raw_text = raw_text[:400] + "..."
-                    push_text = f"🚨 <b>СВЕЖАЯ ВАКАНСИЯ!</b>\n\n{raw_text}"
-                    
-                    kb = InlineKeyboardMarkup(inline_keyboard=[[
-                        InlineKeyboardButton(text="🔥 Открыть в боте", url=f"https://t.me/{(await bot.get_me()).username}?start=push")
-                    ]])
-                    
-                    for u in users:
-                        if str(u['user_id']) == ADMIN_ID: continue
-                        try:
-                            await bot.send_message(u['user_id'], push_text, reply_markup=kb, disable_web_page_preview=True)
-                            await asyncio.sleep(0.05)
-                        except Exception: pass
+            if not IS_MAINTENANCE:
+                jobs = await fetch_feed()
+                if jobs:
+                    latest_job = jobs[0]
+                    if _feed["last_sent_id"] != latest_job['post_url']:
+                        _feed["last_sent_id"] = latest_job['post_url']
+                        p = await get_pool()
+                        async with p.acquire() as c:
+                            users = await c.fetch("SELECT user_id FROM users WHERE premium_until > NOW()")
+                        raw_text = re.sub(r'\n{3,}', '\n\n', latest_job['text'].strip())
+                        if len(raw_text) > 400: raw_text = raw_text[:400] + "..."
+                        push_text = f"🚨 <b>СВЕЖАЯ ВАКАНСИЯ!</b>\n\n{escape(raw_text)}"
+                        kb = InlineKeyboardMarkup(inline_keyboard=[[
+                            InlineKeyboardButton(text="🔥 Открыть в боте", url=f"https://t.me/{bot_me.username}?start=push")
+                        ]])
+                        for u in users:
+                            if str(u['user_id']) == ADMIN_ID: continue
+                            try:
+                                await bot.send_message(u['user_id'], push_text, reply_markup=kb, disable_web_page_preview=True)
+                                await asyncio.sleep(0.05)
+                            except Exception: pass
         except Exception as e:
             log.error(f"Autopush error: {e}")
         await asyncio.sleep(300)
@@ -215,16 +245,20 @@ def run_flask():
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
-class Maintenance(BaseMiddleware):
+class MaintenanceMiddleware(BaseMiddleware):
     async def __call__(self, handler, event: TelegramObject, data: dict):
-        if MAINTENANCE_MODE and not (event.from_user and str(event.from_user.id) == ADMIN_ID):
+        if IS_MAINTENANCE and isinstance(event, (Message, CallbackQuery)):
+            if event.from_user and str(event.from_user.id) == ADMIN_ID:
+                return await handler(event, data)
             if isinstance(event, Message):
-                await event.answer("🛠 <b>Бот на обслуживании.</b> Загляни чуть позже.")
+                await event.answer("🛠 <b>Бот на техническом обслуживании.</b>\n\nМы обновляем базу вакансий. Зайдите чуть позже!")
+            elif isinstance(event, CallbackQuery):
+                await event.answer("🛠 Бот на тех. обслуживании.", show_alert=True)
             return
         return await handler(event, data)
 
-dp.message.middleware(Maintenance())
-dp.callback_query.middleware(Maintenance())
+dp.message.middleware(MaintenanceMiddleware())
+dp.callback_query.middleware(MaintenanceMiddleware())
 
 # ---------- Меню ----------
 def get_main_menu(is_admin=False):
@@ -243,6 +277,51 @@ def get_sub_menu():
         [InlineKeyboardButton(text="📢 Подписаться на канал", url=CHANNEL_URL)],
         [InlineKeyboardButton(text="✅ Я подписался", callback_data="check_sub")]
     ])
+
+def get_admin_menu():
+    maint_btn = "🟢 Тех. работы: ВЫКЛ" if IS_MAINTENANCE else "🔴 Тех. работы: ВКЛ"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💎 Выдать Премиум", callback_data="admin_give"), InlineKeyboardButton(text="🧹 Очистить фейки", callback_data="admin_clear")],
+        [InlineKeyboardButton(text="➕ Добавить канал", callback_data="admin_add_ch"), InlineKeyboardButton(text="🗑 Удалить канал", callback_data="admin_del_ch")],
+        [InlineKeyboardButton(text=maint_btn, callback_data="admin_toggle_maint")],
+        [InlineKeyboardButton(text="🏠 В меню", callback_data="main_menu")]
+    ])
+
+def get_cancel_menu():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="admin_panel")]
+    ])
+
+# ---------- Логика Панели Админа ----------
+async def render_admin_panel(cb: CallbackQuery, state: FSMContext | None = None):
+    if state: await state.clear()
+    if str(cb.from_user.id) != ADMIN_ID: return
+    
+    p = await get_pool()
+    async with p.acquire() as c:
+        total = await c.fetchval("SELECT COUNT(*) FROM users")
+        premium_users = await c.fetch("SELECT user_id, premium_until FROM users WHERE premium_until > NOW() AND is_paid = TRUE")
+        trial_users = await c.fetchval("SELECT COUNT(*) FROM users WHERE premium_until > NOW() AND is_paid = FALSE")
+        channels = await c.fetch("SELECT name FROM channels")
+        
+    prem_count = len(premium_users)
+    ch_list = ", ".join([f"@{r['name']}" for r in channels])
+    maint_status = "🔴 ВКЛЮЧЕНЫ" if IS_MAINTENANCE else "🟢 ВЫКЛЮЧЕНЫ"
+    
+    text = (
+        f"🛠 <b>Пульт управления</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        f"👥 Юзеров: <b>{total}</b>\n"
+        f"💎 Купили: <b>{prem_count}</b>\n"
+        f"🎁 Триал: <b>{trial_users}</b>\n"
+        f"💰 Доход: <b>{prem_count * 250} ⭐</b>\n"
+        f"🛠 Тех. работы: <b>{maint_status}</b>\n\n"
+        f"📡 <b>Каналы в парсере:</b>\n<code>{ch_list}</code>\n\n"
+        "<i>Выбери действие на панели ниже:</i>"
+    )
+    try:
+        await cb.message.edit_text(text, reply_markup=get_admin_menu())
+    except TelegramBadRequest: pass
 
 # ---------- Карточки ----------
 async def render_job(cb: CallbackQuery, index: int):
@@ -264,8 +343,9 @@ async def render_job(cb: CallbackQuery, index: int):
     
     raw_text = re.sub(r'\n{3,}', '\n\n', job['text'].strip())
     if len(raw_text) > 600: raw_text = raw_text[:600].rsplit(' ', 1)[0] + "..."
+    safe_text = escape(raw_text)
     
-    text = f"<b>💼 Вакансия {index+1} из {len(jobs)}</b>\n<i>Источник: @{job['channel']}</i>\n━━━━━━━━━━━━━━━━━━\n\n{raw_text}"
+    text = f"<b>💼 Вакансия {index+1} из {len(jobs)}</b>\n<i>Источник: @{job['channel']}</i>\n━━━━━━━━━━━━━━━━━━\n\n{safe_text}"
     
     nav_row = []
     if index > 0: nav_row.append(InlineKeyboardButton(text="⬅️", callback_data=f"show_jobs:{index-1}"))
@@ -296,17 +376,20 @@ async def inline_search(query: InlineQuery):
     for i, j in enumerate(jobs[:15]):
         if search_q and search_q not in j['text'].lower(): continue
         raw_text = re.sub(r'\n{3,}', '\n\n', j['text'].strip())[:100] + "..."
+        safe_desc = escape(raw_text)
+        safe_content = escape(j['text'][:1000])
         results.append(
             InlineQueryResultArticle(
-                id=str(i), title=f"Вакансия из @{j['channel']}", description=raw_text,
-                input_message_content=InputTextMessageContent(message_text=f"💼 <b>Вакансия:</b>\n\n{j['text'][:1000]}", parse_mode=ParseMode.HTML)
+                id=str(i), title=f"Вакансия из @{j['channel']}", description=safe_desc,
+                input_message_content=InputTextMessageContent(message_text=f"💼 <b>Вакансия:</b>\n\n{safe_content}", parse_mode=ParseMode.HTML)
             )
         )
     await query.answer(results, cache_time=60, is_personal=True)
 
 # ---------- Хендлеры ----------
 @dp.message(CommandStart())
-async def start(message: Message):
+async def start(message: Message, state: FSMContext):
+    await state.clear()
     uid = message.from_user.id
     is_admin = str(uid) == ADMIN_ID
     
@@ -347,7 +430,8 @@ async def cb_check_sub(cb: CallbackQuery):
         await cb.answer("❌ Ты всё еще не подписан!", show_alert=True)
 
 @dp.callback_query(F.data == "main_menu")
-async def back_to_menu(cb: CallbackQuery):
+async def back_to_menu(cb: CallbackQuery, state: FSMContext):
+    await state.clear()
     await cb.message.edit_text("⚡️ <b>Главное меню:</b>", reply_markup=get_main_menu(str(cb.from_user.id) == ADMIN_ID))
     await cb.answer()
 
@@ -405,80 +489,132 @@ async def my_status(cb: CallbackQuery):
     await cb.message.edit_text(text, reply_markup=get_main_menu(uid == ADMIN_ID))
     await cb.answer()
 
-# ---------- Админка ----------
+# ---------- Админ-панель и Кнопки ----------
 @dp.callback_query(F.data == "admin_panel")
-async def admin_panel(cb: CallbackQuery):
-    if str(cb.from_user.id) != ADMIN_ID: return
-    p = await get_pool()
-    async with p.acquire() as c:
-        total = await c.fetchval("SELECT COUNT(*) FROM users")
-        premium_users = await c.fetch("SELECT user_id, premium_until FROM users WHERE premium_until > NOW() AND is_paid = TRUE")
-        trial_users = await c.fetchval("SELECT COUNT(*) FROM users WHERE premium_until > NOW() AND is_paid = FALSE")
-        channels = await c.fetch("SELECT name FROM channels")
-        
-    prem_count = len(premium_users)
-    ch_list = ", ".join([f"@{r['name']}" for r in channels])
-    
-    text = (
-        f"🛠 <b>Админ-панель</b>\n\n"
-        f"👥 Юзеров: <b>{total}</b>\n"
-        f"💎 Купили: <b>{prem_count}</b>\n"
-        f"🎁 Триал: <b>{trial_users}</b>\n"
-        f"💰 Доход: <b>{prem_count * 250} ⭐</b>\n\n"
-        f"📡 <b>Каналы для парсинга:</b>\n<code>{ch_list}</code>\n\n"
-        f"<i>Чтобы добавить канал, напиши:</i>\n"
-        f"<code>/add_channel имя_канала</code>\n"
-        f"<i>Чтобы удалить:</i>\n"
-        f"<code>/del_channel имя_канала</code>"
-    )
-    await cb.message.edit_text(text, reply_markup=get_main_menu(True))
+async def admin_panel(cb: CallbackQuery, state: FSMContext):
+    await render_admin_panel(cb, state)
     await cb.answer()
 
-@dp.message(F.text.startswith("/add_channel "))
-async def add_channel(message: Message):
+@dp.callback_query(F.data == "admin_toggle_maint")
+async def toggle_maint(cb: CallbackQuery):
+    global IS_MAINTENANCE
+    if str(cb.from_user.id) != ADMIN_ID: return
+    
+    IS_MAINTENANCE = not IS_MAINTENANCE
+    val = '1' if IS_MAINTENANCE else '0'
+    
+    p = await get_pool()
+    async with p.acquire() as c:
+        await c.execute("UPDATE settings SET value = $1 WHERE key = 'maintenance'", val)
+        
+    status_text = "ВКЛЮЧЕНЫ (доступ только у тебя)" if IS_MAINTENANCE else "ВЫКЛЮЧЕНЫ (бот работает для всех)"
+    await cb.answer(f"Тех. работы {status_text}", show_alert=True)
+    await render_admin_panel(cb)
+
+@dp.callback_query(F.data == "admin_give")
+async def admin_give_start(cb: CallbackQuery, state: FSMContext):
+    if str(cb.from_user.id) != ADMIN_ID: return
+    await state.set_state(AdminStates.give_id)
+    await cb.message.edit_text(
+        "💎 <b>Выдача Премиума</b>\n\n"
+        "Отправь мне <b>ID пользователя</b>, которому нужно начислить дни.",
+        reply_markup=get_cancel_menu()
+    )
+    await cb.answer()
+
+@dp.message(AdminStates.give_id)
+async def admin_give_days_input(message: Message, state: FSMContext):
     if str(message.from_user.id) != ADMIN_ID: return
-    raw_name = message.text.replace("/add_channel ", "").strip()
-    clean_name = raw_name.replace("https://t.me/", "").replace("@", "").strip()
+    if not message.text.isdigit():
+        await message.answer("❌ ID должен состоять только из цифр. Попробуй еще раз:", reply_markup=get_cancel_menu())
+        return
+    await state.update_data(target_uid=int(message.text))
+    await state.set_state(AdminStates.give_days)
+    await message.answer(
+        f"👤 Выбран юзер: <code>{message.text}</code>\n\n"
+        "Теперь напиши, <b>сколько дней</b> Премиума ему выдать (только число):",
+        reply_markup=get_cancel_menu()
+    )
+
+@dp.message(AdminStates.give_days)
+async def admin_give_days_finish(message: Message, state: FSMContext):
+    if str(message.from_user.id) != ADMIN_ID: return
+    if not message.text.isdigit():
+        await message.answer("❌ Дни должны быть числом. Попробуй еще раз:", reply_markup=get_cancel_menu())
+        return
+    
+    data = await state.get_data()
+    target_uid = data['target_uid']
+    days = int(message.text)
+    
+    await add_premium_days(target_uid, days)
+    await state.clear()
+    
+    await message.answer(
+        f"✅ <b>Успешно!</b>\nВыдано {days} дней юзеру <code>{target_uid}</code>.",
+        reply_markup=get_admin_menu()
+    )
+
+@dp.callback_query(F.data == "admin_clear")
+async def admin_clear_fakes(cb: CallbackQuery):
+    if str(cb.from_user.id) != ADMIN_ID: return
+    p = await get_pool()
+    async with p.acquire() as c: 
+        await c.execute("UPDATE users SET premium_until = NOW() WHERE is_paid = FALSE")
+    await cb.answer("🧹 Все неоплаченные подписки сброшены!", show_alert=True)
+    await render_admin_panel(cb)
+
+@dp.callback_query(F.data == "admin_add_ch")
+async def admin_add_ch_start(cb: CallbackQuery, state: FSMContext):
+    if str(cb.from_user.id) != ADMIN_ID: return
+    await state.set_state(AdminStates.add_channel)
+    await cb.message.edit_text(
+        "➕ <b>Добавление канала</b>\n\n"
+        "Отправь мне юзернейм канала (можно с @ или ссылкой).",
+        reply_markup=get_cancel_menu()
+    )
+    await cb.answer()
+
+@dp.message(AdminStates.add_channel)
+async def admin_add_ch_finish(message: Message, state: FSMContext):
+    if str(message.from_user.id) != ADMIN_ID: return
+    clean_name = message.text.replace("https://t.me/", "").replace("@", "").strip()
     
     p = await get_pool()
     async with p.acquire() as c:
         try:
             await c.execute("INSERT INTO channels (name) VALUES ($1)", clean_name)
-            _feed["data"] = None # Сбрасываем кеш, чтобы бот сразу прочитал новый канал
-            await message.answer(f"✅ Канал <b>@{clean_name}</b> добавлен в парсер.")
+            _feed["data"] = None
+            await state.clear()
+            await message.answer(f"✅ Канал <b>@{clean_name}</b> добавлен в парсер.", reply_markup=get_admin_menu())
         except asyncpg.exceptions.UniqueViolationError:
-            await message.answer(f"⚠️ Канал <b>@{clean_name}</b> уже есть в списке.")
+            await message.answer(f"⚠️ Канал <b>@{clean_name}</b> уже есть в списке.", reply_markup=get_admin_menu())
 
-@dp.message(F.text.startswith("/del_channel "))
-async def del_channel(message: Message):
+@dp.callback_query(F.data == "admin_del_ch")
+async def admin_del_ch_start(cb: CallbackQuery, state: FSMContext):
+    if str(cb.from_user.id) != ADMIN_ID: return
+    await state.set_state(AdminStates.del_channel)
+    await cb.message.edit_text(
+        "🗑 <b>Удаление канала</b>\n\n"
+        "Отправь мне юзернейм канала, который нужно убрать.",
+        reply_markup=get_cancel_menu()
+    )
+    await cb.answer()
+
+@dp.message(AdminStates.del_channel)
+async def admin_del_ch_finish(message: Message, state: FSMContext):
     if str(message.from_user.id) != ADMIN_ID: return
-    raw_name = message.text.replace("/del_channel ", "").strip()
-    clean_name = raw_name.replace("https://t.me/", "").replace("@", "").strip()
+    clean_name = message.text.replace("https://t.me/", "").replace("@", "").strip()
     
     p = await get_pool()
     async with p.acquire() as c:
         result = await c.execute("DELETE FROM channels WHERE name = $1", clean_name)
         if result == "DELETE 1":
             _feed["data"] = None
-            await message.answer(f"🗑 Канал <b>@{clean_name}</b> удален.")
+            await state.clear()
+            await message.answer(f"🗑 Канал <b>@{clean_name}</b> удален.", reply_markup=get_admin_menu())
         else:
-            await message.answer(f"❌ Канал <b>@{clean_name}</b> не найден.")
-
-@dp.message(F.text == "/clear_fakes")
-async def clear_fakes(message: Message):
-    if str(message.from_user.id) != ADMIN_ID: return
-    p = await get_pool()
-    async with p.acquire() as c: await c.execute("UPDATE users SET premium_until = NOW() WHERE is_paid = FALSE")
-    await message.answer("🧹 Фейковые випки сброшены.")
-
-@dp.message(F.text.startswith("/give "))
-async def give_premium(message: Message):
-    if str(message.from_user.id) != ADMIN_ID: return
-    try:
-        _, uid, days = message.text.split()
-        await add_premium_days(int(uid), int(days))
-        await message.answer(f"✅ Выдал {days} дней.")
-    except Exception as e: await message.answer(f"❌ Ошибка: {e}")
+            await message.answer(f"❌ Канал <b>@{clean_name}</b> не найден.", reply_markup=get_admin_menu())
 
 # ---------- Запуск ----------
 async def main():
