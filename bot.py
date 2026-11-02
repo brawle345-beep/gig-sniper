@@ -166,7 +166,7 @@ REQUIRED_WORDS = ["python", "react", "frontend", "backend", "разработч�
 STOP_WORDS = ["курс", "промокод", "скидка", "подпишись", "реклама", "инфобизнес", "наставничество", "база", "слив", "обучение", "заработок", "доход", "крипт", "бесплатно", "лайфхак", "марафон", "вебинар"]
 
 _feed = {"data": None, "ts": 0.0}
-_feed_lock = asyncio.Lock() 
+_feed_lock = asyncio.Lock()
 
 def is_valid_job(text: str) -> bool:
     text_lower = text.lower()
@@ -599,13 +599,44 @@ async def pre_checkout(q: PreCheckoutQuery): await q.answer(ok=True)
 @dp.message(F.successful_payment)
 async def on_paid(message: Message):
     if message.successful_payment.invoice_payload != "premium_30": return
+    
     try:
         await add_premium_days(message.from_user.id, 30)
+        
         p = await get_pool()
-        async with p.acquire() as c: await c.execute("UPDATE users SET is_paid = TRUE WHERE user_id = $1", message.from_user.id)
-        await bot.send_message(ADMIN_ID, f"💰 <b>Оплата!</b> ID: <code>{message.from_user.id}</code>")
-    except Exception: pass
-    await message.answer("✅ <b>Оплата прошла!</b> Доступ на 30 дней открыт.", reply_markup=await build_main_menu(message.from_user.id, str(message.from_user.id) == ADMIN_ID))
+        async with p.acquire() as c: 
+            await c.execute("UPDATE users SET is_paid = TRUE WHERE user_id = $1", message.from_user.id)
+            
+        name = escape(message.from_user.first_name)
+        if message.from_user.username: name += f" (@{message.from_user.username})"
+            
+        await bot.send_message(
+            ADMIN_ID, 
+            f"💰 <b>Успешная оплата!</b>\n\n"
+            f"👤 Юзер: {name}\n"
+            f"🆔 ID: <code>{message.from_user.id}</code>\n"
+            f"💎 Выдано: 30 дней Премиума."
+        )
+        
+        await message.answer(
+            "✅ <b>Оплата прошла!</b> Доступ на 30 дней открыт.", 
+            reply_markup=await build_main_menu(message.from_user.id, str(message.from_user.id) == ADMIN_ID)
+        )
+        
+    except Exception as e:
+        log.error(f"Ошибка при обработке оплаты для {message.from_user.id}: {e}")
+        
+        await bot.send_message(
+            ADMIN_ID, 
+            f"⚠️ <b>ОШИБКА ОПЛАТЫ!</b>\n\n"
+            f"Юзер <code>{message.from_user.id}</code> оплатил, но база выдала ошибку:\n<code>{e}</code>\n\n"
+            f"Выдай вручную: <code>/give {message.from_user.id} 30</code>"
+        )
+        
+        await message.answer(
+            "✅ Оплата получена! Произошла техническая задержка с активацией.\n"
+            "Администратор уже уведомлен и выдаст доступ в ближайшее время."
+        )
 
 @dp.callback_query(F.data == "invite")
 async def invite(cb: CallbackQuery):
