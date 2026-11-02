@@ -1,6 +1,4 @@
-# language: Python 3.11, file: bot.py, runtime: aiogram 3.x + asyncpg + aiohttp
-# pip install aiogram==3.20.0 asyncpg==0.30.0 aiohttp==3.11.0 flask==3.1.2
-
+# language: Python 3.11, file: bot.py
 import os
 import time
 import json
@@ -75,14 +73,12 @@ async def add_premium_days(user_id: int, days: int):
         """, user_id, str(days))
 
 async def has_premium(user_id: int) -> bool:
-    if str(user_id) == ADMIN_ID:
-        return True
+    if str(user_id) == ADMIN_ID: return True
     until = await get_premium_until(user_id)
     return bool(until and until.timestamp() > time.time())
 
 async def apply_referral(ref_id: int, new_uid: int) -> bool:
-    if ref_id == new_uid:
-        return False
+    if ref_id == new_uid: return False
     p = await get_pool()
     async with p.acquire() as c:
         async with c.transaction():
@@ -90,8 +86,7 @@ async def apply_referral(ref_id: int, new_uid: int) -> bool:
                 INSERT INTO referrals (referrer, referred) VALUES ($1, $2)
                 ON CONFLICT DO NOTHING RETURNING referrer
             """, ref_id, new_uid)
-            if claimed is None:
-                return False
+            if claimed is None: return False
             await c.execute("""
                 INSERT INTO users (user_id, premium_until)
                 VALUES ($1, NOW() + interval '7 days')
@@ -111,14 +106,10 @@ async def fetch_feed() -> list:
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as s:
             async with s.get(FEED_URL) as r:
-                if r.status != 200:
-                    return _feed["data"] or []
+                if r.status != 200: return _feed["data"] or []
                 raw_text = await r.text()
                 data = json.loads(raw_text)
-                
-                if isinstance(data, dict):
-                    data = data.get("jobs", [])
-                    
+                if isinstance(data, dict): data = data.get("jobs", [])
                 _feed["data"] = data
                 _feed["ts"] = now
                 return data
@@ -128,11 +119,8 @@ async def fetch_feed() -> list:
 
 # ---------- Flask (Render keepalive) ----------
 app = Flask(__name__)
-
 @app.route("/")
-def home():
-    return "Bot is running!"
-
+def home(): return "Bot is running!"
 def run_flask():
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)), threaded=True)
 
@@ -181,34 +169,27 @@ async def start(message: Message):
 
     until = await get_premium_until(uid)
     if until is None:
-        # Даем 3 дня бесплатно новым пользователям
-        await add_premium_days(uid, 3)
+        await add_premium_days(uid, 0)
         if not is_admin:
             try:
                 name = escape(message.from_user.first_name)
-                if message.from_user.username:
-                    name += f" (@{message.from_user.username})"
-                await bot.send_message(ADMIN_ID, f"👤 <b>Новый юзер</b>\n{name}\nID: <code>{uid}</code>\n🎁 Выдан триал на 3 дня.")
-            except Exception:
-                pass
+                if message.from_user.username: name += f" (@{message.from_user.username})"
+                await bot.send_message(ADMIN_ID, f"👤 <b>Новый юзер</b>\n{name}\nID: <code>{uid}</code>")
+            except Exception: pass
 
     parts = message.text.split()
     if len(parts) > 1 and parts[1].startswith("ref_"):
         raw = parts[1][4:]
         if raw.isdigit() and await apply_referral(int(raw), uid):
             try:
-                await bot.send_message(int(raw),
-                    f"🎁 По твоей ссылке перешёл {escape(message.from_user.first_name)}! +7 дней.")
-            except Exception:
-                pass
+                await bot.send_message(int(raw), f"🎁 По твоей ссылке перешёл {escape(message.from_user.first_name)}! +7 дней.")
+            except Exception: pass
 
     await message.answer(
         f"👋 <b>Привет, {escape(message.from_user.first_name)}!</b>\n\n"
         "🤖 Это <b>Gig Sniper</b> — радар свежих IT-вакансий и заказов.\n\n"
-        "<blockquote>Сканируем биржи каждые 10 минут, отсеиваем шлак, "
+        "<blockquote>Сканируем биржи и Telegram-каналы каждые 10 минут, отсеиваем шлак, "
         "присылаем только актуальное в долларах и рублях.</blockquote>\n\n"
-        "🎁 <b>Тебе начислено 3 дня Премиума бесплатно!</b>\n"
-        "Пользуйся полным доступом, пока не решишь оформить подписку на месяц.\n\n"
         "⚡️ <b>Выбери действие:</b>",
         reply_markup=get_main_menu(is_admin),
     )
@@ -220,8 +201,7 @@ async def show_jobs(cb: CallbackQuery):
     is_admin = str(cb.from_user.id) == ADMIN_ID
 
     if not jobs:
-        await safe_edit(cb.message, "Пока новых нет. Загляни позже!",
-                        reply_markup=get_main_menu(is_admin))
+        await safe_edit(cb.message, "Пока новых нет. Загляни позже!", reply_markup=get_main_menu(is_admin))
         await cb.answer()
         return
 
@@ -258,20 +238,15 @@ async def pre_checkout(q: PreCheckoutQuery):
 
 @dp.message(F.successful_payment)
 async def on_paid(message: Message):
-    log.info("Получена оплата! Payload: %s, Юзер: %s", 
-             message.successful_payment.invoice_payload, message.from_user.id)
-             
     if message.successful_payment.invoice_payload != "premium_30":
-        log.warning("Payload не совпал!")
         return
-        
     try:
         await add_premium_days(message.from_user.id, 30)
-        log.info("Премиум успешно начислен для %s", message.from_user.id)
-        
-        await bot.send_message(ADMIN_ID, f"💰 <b>Новая оплата!</b>\nЮзер: {escape(message.from_user.first_name)}\nID: <code>{message.from_user.id}</code>")
+        name = escape(message.from_user.first_name)
+        if message.from_user.username: name += f" (@{message.from_user.username})"
+        await bot.send_message(ADMIN_ID, f"💰 <b>Новая оплата!</b>\nЮзер: {name}\nID: <code>{message.from_user.id}</code>")
     except Exception as e:
-        log.error("Ошибка при начислении премиума: %s", e)
+        log.error("Ошибка при начислении: %s", e)
         
     await message.answer("✅ <b>Оплата прошла!</b> Доступ на 30 дней открыт.",
                          reply_markup=get_main_menu(str(message.from_user.id) == ADMIN_ID))
@@ -297,14 +272,13 @@ async def my_status(cb: CallbackQuery):
             days = int((until.timestamp() - time.time()) / 86400)
             text = f"💎 <b>Статус:</b> Премиум\n<blockquote>Осталось дней: <b>{days}</b></blockquote>"
         else:
-            text = "👤 <b>Статус:</b> Бесплатный\n<blockquote>Доступно 3 вакансии.\n🎁 Триал кончился — купи Премиум для полного доступа.</blockquote>"
+            text = "👤 <b>Статус:</b> Бесплатный\n<blockquote>Доступно 3 вакансии.</blockquote>"
     await safe_edit(cb.message, text, reply_markup=get_main_menu(uid == ADMIN_ID))
     await cb.answer()
 
 @dp.callback_query(F.data == "admin_panel")
 async def admin_panel(cb: CallbackQuery):
-    if str(cb.from_user.id) != ADMIN_ID:
-        return
+    if str(cb.from_user.id) != ADMIN_ID: return
     p = await get_pool()
     async with p.acquire() as c:
         total = await c.fetchval("SELECT COUNT(*) FROM users")
@@ -312,10 +286,8 @@ async def admin_panel(cb: CallbackQuery):
     
     prem_count = len(premium_users)
     prem_list = ""
-    
     for u in premium_users:
-        if str(u['user_id']) == ADMIN_ID: 
-            continue
+        if str(u['user_id']) == ADMIN_ID: continue
         until_str = u['premium_until'].strftime("%d.%m.%Y")
         prem_list += f"🔹 <code>{u['user_id']}</code> — до {until_str}\n"
 
@@ -325,7 +297,6 @@ async def admin_panel(cb: CallbackQuery):
         f"💎 Активных подписок: <b>{prem_count}</b>\n"
         f"💰 Доход: <b>{prem_count * 250} ⭐</b>\n\n"
     )
-    
     if prem_list:
         text += f"<b>Список купивших (ID):</b>\n{prem_list}"
     else:
@@ -336,8 +307,7 @@ async def admin_panel(cb: CallbackQuery):
 
 @dp.message(F.text.startswith("/give "))
 async def give_premium(message: Message):
-    if str(message.from_user.id) != ADMIN_ID:
-        return
+    if str(message.from_user.id) != ADMIN_ID: return
     try:
         _, uid, days = message.text.split()
         await add_premium_days(int(uid), int(days))
@@ -350,7 +320,6 @@ async def main():
     log.info("init db...")
     await init_db()
     log.info("bot started")
-    # drop_pending_updates=False — чтобы не терять оплаты, пока сервер спал
     await bot.delete_webhook(drop_pending_updates=False)
     await dp.start_polling(bot)
 
