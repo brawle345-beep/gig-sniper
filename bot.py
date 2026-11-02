@@ -1,7 +1,7 @@
 # language: Python 3.11, file: bot.py
 import os
 import asyncio
-import json
+import asyncpg
 import time
 import sys
 import requests
@@ -15,30 +15,50 @@ from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
 
 TOKEN = os.environ.get("BOT_TOKEN")
+DATABASE_URL = os.environ.get("DATABASE_URL") # Строка подключения из Neon
 FEED_URL = "https://raw.githubusercontent.com/brawle345-beep/gig-sniper/main/feed.json"
-DB_FILE = "users.json"
 
 ADMIN_ID = "7183342708"
 MAINTENANCE_MODE = False
-JOBS_PER_PAGE = 5
 
-# --- Утилиты БД ---
-def load_db():
-    if os.path.exists(DB_FILE):
-        try:
-            with open(DB_FILE, "r") as f: return json.load(f)
-        except: return {}
-    return {}
+# --- База данных ---
+async def init_db():
+    """Создаёт таблицу пользователей при первом запуске"""
+    conn = await asyncpg.connect(DATABASE_URL)
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id BIGINT PRIMARY KEY,
+            premium_until TIMESTAMP WITH TIME ZONE
+        );
+    """)
+    await conn.close()
 
-def save_db(db):
-    with open(DB_FILE, "w") as f:
-        json.dump(db, f)
+async def get_premium_until(user_id: int):
+    """Возвращает дату окончания подписки или None"""
+    conn = await asyncpg.connect(DATABASE_URL)
+    row = await conn.fetchrow("SELECT premium_until FROM users WHERE user_id = $1", user_id)
+    await conn.close()
+    if row:
+        return row['premium_until']
+    return None
 
-def has_premium(user_id):
-    if str(user_id) == ADMIN_ID: return True
-    db = load_db()
-    uid = str(user_id)
-    if uid in db and db[uid] > time.time(): return True
+async def set_premium_until(user_id: int, until_timestamp: float):
+    """Устанавливает дату окончания подписки"""
+    conn = await asyncpg.connect(DATABASE_URL)
+    await conn.execute("""
+        INSERT INTO users (user_id, premium_until) 
+        VALUES ($1, to_timestamp($2)) 
+        ON CONFLICT (user_id) DO UPDATE SET premium_until = to_timestamp($2)
+    """, user_id, until_timestamp)
+    await conn.close()
+
+async def has_premium(user_id: int):
+    """Проверяет, активна ли подписка"""
+    if str(user_id) == ADMIN_ID:
+        return True
+    until = await get_premium_until(user_id)
+    if until and until.timestamp() > time.time():
+        return True
     return False
 
 # --- Flask для Render ---
@@ -67,17 +87,9 @@ class MaintenanceMiddleware(BaseMiddleware):
 dp.message.middleware(MaintenanceMiddleware())
 dp.callback_query.middleware(MaintenanceMiddleware())
 
-# Безопасное редактирование сообщений
-async def safe_edit(message: Message, text: str, reply_markup=None):
-    try:
-        await message.edit_text(text, reply_markup=reply_markup, disable_web_page_preview=True)
-    except TelegramBadRequest:
-        pass 
-
-# --- Клавиатуры ---
 def get_main_menu(is_admin=False):
     kb = [
-        [InlineKeyboardButton(text="🔥 Свежие вакансии", callback_data="jobs:0")],
+        [InlineKeyboardButton(text="🔥 Свежие вакансии", callback_data="show_jobs")],
         [InlineKeyboardButton(text="💎 Купить Премиум", callback_data="buy_premium")],
         [InlineKeyboardButton(text="👤 Мой профиль", callback_data="my_status")],
         [InlineKeyboardButton(text="🎁 Пригласить друга", callback_data="invite")],
@@ -87,19 +99,23 @@ def get_main_menu(is_admin=False):
         kb.insert(0, [InlineKeyboardButton(text="🛠 Админ-панель", callback_data="admin_panel")])
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
-def get_back_button():
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад в меню", callback_data="menu_main")]])
+async def safe_edit(message: Message, text: str, reply_markup=None):
+    try:
+        await message.edit_text(text, reply_markup=reply_markup, disable_web_page_preview=True)
+    except TelegramBadRequest:
+        pass 
 
-# --- Хендлеры ---
 @dp.message(CommandStart())
 async def start(message: Message):
-    db = load_db()
-    uid = str(message.from_user.id)
-    is_admin = (uid == ADMIN_ID)
+    uid = message.from_user.id
+    is_admin = (str(uid) == ADMIN_ID)
     
-    # Уведомление админу о новом юзере
-    if uid not in db:
-        db[uid] = 0
+    # Проверяем, новый ли пользователь
+    until = await get_premium_until(uid)
+    is_new = (until is None)
+    
+    if is_new:
+        await set_premium_until(uid, 0)
         if not is_admin:
             try:
                 user_name = message.from_user.first_name
@@ -111,101 +127,56 @@ async def start(message: Message):
     args = message.text.split()
     if len(args) > 1 and args[1].startswith("ref_"):
         ref_id = args[1].replace("ref_", "")
-        if ref_id.isdigit() and ref_id != uid:
-            if ref_id in db: db[ref_id] += (7 * 86400)
-            else: db[ref_id] = time.time() + (7 * 86400)
+        if ref_id.isdigit() and int(ref_id) != uid:
+            ref_until = await get_premium_until(int(ref_id))
+            base_time = time.time()
+            if ref_until and ref_until.timestamp() > time.time():
+                base_time = ref_until.timestamp()
+            await set_premium_until(int(ref_id), base_time + (7 * 86400))
             try:
-                await bot.send_message(ref_id, f"🎁 По твоей ссылке перешел {message.from_user.first_name}! Тебе начислено +7 дней Премиума.")
+                await bot.send_message(int(ref_id), f"🎁 По твоей ссылке перешел {message.from_user.first_name}! Тебе начислено +7 дней Премиума.")
             except: pass
-    save_db(db)
 
     text = (
         f"👋 <b>Привет, {message.from_user.first_name}!</b>\n\n"
         "🤖 Это <b>Gig Sniper</b> — твой радар свежих IT-заказов и вакансий в удаленке.\n\n"
-        "<blockquote>"
-        "Мы сканируем мировые биржи (RemoteOK, Freelancer) каждые 10 минут, отсеиваем шлак и присылаем только актуальные цели в долларах и рублях."
-        "</blockquote>\n\n"
+        "<blockquote>Мы сканируем мировые биржи (RemoteOK, Freelancer) каждые 10 минут, отсеиваем шлак и присылаем только актуальные цели в долларах и рублях.</blockquote>\n\n"
         "⚡️ <b>Выбери действие на панели ниже:</b>"
     )
     await message.answer(text, reply_markup=get_main_menu(is_admin))
 
-@dp.callback_query(F.data == "menu_main")
-async def back_to_menu(callback: CallbackQuery):
-    is_admin = (str(callback.from_user.id) == ADMIN_ID)
-    text = (
-        f"👋 <b>Главное меню.</b>\n\n"
-        "Твой радар на связи. Выбирай, что будем делать:"
-    )
-    await safe_edit(callback.message, text, reply_markup=get_main_menu(is_admin))
-    await callback.answer()
-
-@dp.callback_query(F.data.startswith("jobs:"))
+@dp.callback_query(F.data == "show_jobs")
 async def show_jobs(callback: CallbackQuery):
-    page = int(callback.data.split(":")[1])
-    
+    await safe_edit(callback.message, "🔄 Загружаю свежие вакансии...")
     try:
         r = requests.get(FEED_URL, timeout=10)
-        all_jobs = r.json() if r.status_code == 200 else []
+        jobs = r.json() if r.status_code == 200 else []
     except Exception:
-        all_jobs = []
+        jobs = []
 
-    if not all_jobs:
-        await safe_edit(callback.message, "Пока новых вакансий нет. Загляни позже!", reply_markup=get_back_button())
+    if not jobs:
+        await safe_edit(callback.message, "Пока новых вакансий нет. Загляни позже!", reply_markup=get_main_menu(is_admin=(str(callback.from_user.id) == ADMIN_ID)))
         await callback.answer()
         return
 
-    is_premium = has_premium(callback.from_user.id)
-    # Бесплатным показываем только первые 3 вакансии, премиум видит все
-    jobs = all_jobs if is_premium else all_jobs[:3]
-
-    total_pages = (len(jobs) - 1) // JOBS_PER_PAGE + 1
-    if page >= total_pages: page = total_pages - 1
-    if page < 0: page = 0
-
-    start_idx = page * JOBS_PER_PAGE
-    end_idx = start_idx + JOBS_PER_PAGE
-    page_jobs = jobs[start_idx:end_idx]
-
-    text = f"🔥 <b>Свежие вакансии</b> (Стр. {page + 1}/{total_pages}):\n\n"
-    kb = []
-
-    for job in page_jobs:
+    is_prem = await has_premium(callback.from_user.id)
+    limit = 10 if is_prem else 3
+    text = "🔥 <b>Свежие вакансии:</b>\n\n"
+    for job in jobs[:limit]:
         title = job.get("title", "Без названия")
         company = job.get("company", "Не указана")
         url = job.get("url", "")
-        sal = ""
-        if job.get("salary_min") or job.get("salary_max"):
-            sal = f"💰 ${job.get('salary_min', 0)} - ${job.get('salary_max', 0)}\n"
-            
-        text += f"▪️ <b>{title}</b>\n🏢 {company}\n{sal}\n"
-        
-        # Кнопка под каждую вакансию
-        btn_text = f"Открыть: {title[:20]}..."
-        kb.append([InlineKeyboardButton(text=btn_text, url=url)])
-
-    # Навигация (листалка)
-    nav = []
-    if page > 0:
-        nav.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"jobs:{page-1}"))
-    if page < total_pages - 1:
-        nav.append(InlineKeyboardButton(text="Ещё ➡️", callback_data=f"jobs:{page+1}"))
-    if nav:
-        kb.append(nav)
-
-    if not is_premium:
-        text += f"🔒 <i>Показано {len(jobs)} из {len(all_jobs)} вакансий.</i>\n"
-        text += "💎 Купи Премиум, чтобы снять лимит."
-        kb.append([InlineKeyboardButton(text="💎 Купить Премиум", callback_data="buy_premium")])
-        
-    kb.append([InlineKeyboardButton(text="🔙 В главное меню", callback_data="menu_main")])
+        text += f"▪️ <a href='{url}'>{title}</a>\n🏢 {company}\n\n"
     
-    await safe_edit(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+    if not is_prem:
+        text += f"🔒 <i>Показано {limit} из {len(jobs)} вакансий.</i>\n💎 Купи Премиум, чтобы видеть их все."
+    
+    await safe_edit(callback.message, text, reply_markup=get_main_menu(is_admin=(str(callback.from_user.id) == ADMIN_ID)))
     await callback.answer()
 
 @dp.callback_query(F.data == "buy_premium")
 async def buy_premium(callback: CallbackQuery):
-    await safe_edit(callback.message, "💎 <b>Счет отправлен ниже.</b>\n\nПосле успешной оплаты доступ откроется автоматически. (Для возврата в меню напиши /start)", reply_markup=get_back_button())
-    
+    await safe_edit(callback.message, "💎 <b>Счет на оплату отправлен ниже.</b>\n\nПосле оплаты доступ откроется автоматически. (В меню — /start)", reply_markup=get_main_menu(is_admin=(str(callback.from_user.id) == ADMIN_ID)))
     await bot.send_invoice(
         chat_id=callback.from_user.id,
         title="Премиум доступ",
@@ -223,63 +194,51 @@ async def pre_checkout(q: PreCheckoutQuery):
 
 @dp.message(F.successful_payment)
 async def on_paid(message: Message):
-    db = load_db()
-    uid = str(message.from_user.id)
-    db[uid] = time.time() + (30 * 86400)
-    save_db(db)
-    
-    is_admin = (uid == ADMIN_ID)
-    await message.answer("✅ <b>Оплата прошла!</b> Доступ открыт на 30 дней. Жми «Свежие вакансии»!", reply_markup=get_main_menu(is_admin))
+    uid = message.from_user.id
+    current_until = await get_premium_until(uid)
+    base_time = time.time()
+    if current_until and current_until.timestamp() > time.time():
+        base_time = current_until.timestamp()
+    await set_premium_until(uid, base_time + (30 * 86400))
+    await message.answer("✅ <b>Оплата прошла!</b> Доступ открыт на 30 дней. Жми «Свежие вакансии»!", reply_markup=get_main_menu(is_admin=(str(uid) == ADMIN_ID)))
 
 @dp.callback_query(F.data == "invite")
 async def invite(callback: CallbackQuery):
     me = await bot.get_me()
     link = f"https://t.me/{me.username}?start=ref_{callback.from_user.id}"
-    text = (
-        f"🎁 <b>Партнерская программа</b>\n\n"
-        f"Твоя ссылка:\n<code>{link}</code>\n\n"
-        f"<blockquote>За каждого друга, который зайдет по ссылке, ты получаешь <b>+7 дней Премиума</b> бесплатно.</blockquote>"
-    )
-    await safe_edit(callback.message, text, reply_markup=get_back_button())
+    text = f"🎁 <b>Партнерская программа</b>\n\nТвоя ссылка:\n<code>{link}</code>\n\n<blockquote>За каждого друга — <b>+7 дней Премиума</b>.</blockquote>"
+    await safe_edit(callback.message, text, reply_markup=get_main_menu(is_admin=(str(callback.from_user.id) == ADMIN_ID)))
     await callback.answer()
 
 @dp.callback_query(F.data == "my_status")
 async def my_status(callback: CallbackQuery):
     uid = str(callback.from_user.id)
     if uid == ADMIN_ID:
-        text = "👑 <b>Твой статус:</b> Админ\n<blockquote>У тебя безлимитный доступ ко всем функциям навсегда.</blockquote>"
+        text = "👑 <b>Твой статус:</b> Админ\n<blockquote>Безлимитный доступ навсегда.</blockquote>"
     else:
-        db = load_db()
-        until = db.get(uid, 0)
-        
-        if until > time.time():
-            days_left = int((until - time.time()) / 86400)
+        until = await get_premium_until(callback.from_user.id)
+        if until and until.timestamp() > time.time():
+            days_left = int((until.timestamp() - time.time()) / 86400)
             text = f"💎 <b>Твой статус:</b> Премиум\n<blockquote>Осталось дней: <b>{days_left}</b></blockquote>"
         else:
-            text = "👤 <b>Твой статус:</b> Бесплатный\n<blockquote>Доступно только 3 вакансии. Купи Премиум, чтобы видеть их все.</blockquote>"
-            
-    await safe_edit(callback.message, text, reply_markup=get_back_button())
+            text = "👤 <b>Твой статус:</b> Бесплатный\n<blockquote>Доступно только 3 вакансии.</blockquote>"
+    await safe_edit(callback.message, text, reply_markup=get_main_menu(is_admin=(uid == ADMIN_ID)))
     await callback.answer()
 
-# --- Админ панель ---
 @dp.callback_query(F.data == "admin_panel")
 async def admin_panel(callback: CallbackQuery):
     if str(callback.from_user.id) != ADMIN_ID: return
-    db = load_db()
-    total = len(db)
-    premium = sum(1 for uid, until in db.items() if until > time.time())
-    
-    text = (
-        f"🛠 <b>Админ-панель</b>\n\n"
-        f"👥 Всего пользователей: <b>{total}</b>\n"
-        f"💎 Активных подписок: <b>{premium}</b>\n"
-        f"💰 Заработано: <b>{premium * 250} ⭐</b>\n\n"
-        f"<i>База сбрасывается при каждом перезапуске сервера.</i>"
-    )
-    await safe_edit(callback.message, text, reply_markup=get_back_button())
+    conn = await asyncpg.connect(DATABASE_URL)
+    total = await conn.fetchval("SELECT COUNT(*) FROM users")
+    premium = await conn.fetchval("SELECT COUNT(*) FROM users WHERE premium_until > NOW()")
+    await conn.close()
+    text = f"🛠 <b>Админ-панель</b>\n\n👥 Всего пользователей: <b>{total}</b>\n💎 Активных подписок: <b>{premium}</b>\n💰 Примерный доход: <b>{premium * 250} ⭐</b>\n\n<i>Данные хранятся в облаке и не сбрасываются.</i>"
+    await safe_edit(callback.message, text, reply_markup=get_main_menu(is_admin=True))
     await callback.answer()
 
 async def main():
+    print("Инициализация базы данных...")
+    await init_db()  # Создаем таблицу при старте
     print("Бот запущен...")
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
