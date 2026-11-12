@@ -33,8 +33,9 @@ TOKEN = os.environ.get("BOT_TOKEN")
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 ADMIN_ID = "7183342708"
-CHANNEL_ID = "@gigsnipervakansii"
-CHANNEL_URL = "https://t.me/gigsnipervakansii"
+# НОВЫЙ КАНАЛ
+CHANNEL_ID = "@gigsniper_channel"
+CHANNEL_URL = "https://t.me/gigsniper_channel"
 
 IS_MAINTENANCE = False
 
@@ -94,7 +95,6 @@ async def init_db():
                 paid_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
                 text TEXT DEFAULT NULL
             );
-            -- КРИТИЧЕСКИЙ ФИКС: добавляем колонку text, если таблица старая
             ALTER TABLE pending_vacancies ADD COLUMN IF NOT EXISTS text TEXT DEFAULT NULL;
         """)
         
@@ -162,8 +162,10 @@ async def check_sub(user_id: int) -> bool:
     try:
         member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
         return member.status in ["member", "administrator", "creator"]
-    except Exception:
-        return False
+    except Exception as e:
+        log.warning(f"Ошибка проверки подписки: {e}")
+        # Если бот не админ в канале или канал приватный, возвращаем True чтобы не лочить всех
+        return True 
 
 async def apply_referral(ref_id: int, new_uid: int) -> bool:
     if ref_id == new_uid: return False
@@ -171,7 +173,6 @@ async def apply_referral(ref_id: int, new_uid: int) -> bool:
         p = await get_pool()
         async with p.acquire() as c:
             async with c.transaction():
-                # Анти-ботнет: не больше 3 рефералов в сутки
                 today_count = await c.fetchval("""
                     SELECT COUNT(*) FROM referrals 
                     WHERE referrer = $1 AND created_at > NOW() - interval '1 day'
@@ -482,7 +483,7 @@ async def render_job(cb: CallbackQuery, index: int):
     kb.append([InlineKeyboardButton(text="🏠 В меню", callback_data="main_menu")])
     await safe_edit(cb.message, text, InlineKeyboardMarkup(inline_keyboard=kb))
 
-# ---------- Инлайн (С анти-халявой) ----------
+# ---------- Инлайн ----------
 @dp.inline_query()
 async def inline_search(query: InlineQuery):
     try:
@@ -490,7 +491,6 @@ async def inline_search(query: InlineQuery):
         results = []
         search_q = query.query.lower()
         
-        # ПРОВЕРКА ПРЕМИУМА: 3 для бесплатных, 15 для премиума
         is_prem = await has_premium(query.from_user.id)
         limit = 15 if is_prem else 3
         
@@ -516,14 +516,13 @@ async def cancel_handler(message: Message, state: FSMContext):
     if current_state is None: return
     await state.clear()
     
-    # Обработка отмены для оплаченной вакансии
     if current_state == UserStates.waiting_for_vacancy.state:
         try:
             p = await get_pool()
             async with p.acquire() as c:
                 await c.execute("DELETE FROM pending_vacancies WHERE user_id = $1", message.from_user.id)
         except Exception: pass
-        await message.answer("❌ Публикация отменена. Оплата за вакансию не возвращается.", reply_markup=await build_main_menu(message.from_user.id, str(message.from_user.id) == ADMIN_ID))
+        await message.answer("❌ Публикация отменена. Оплата не возвращается.", reply_markup=await build_main_menu(message.from_user.id, str(message.from_user.id) == ADMIN_ID))
         return
         
     if current_state in [AdminStates.give_id.state, AdminStates.give_days.state, AdminStates.add_channel.state, AdminStates.del_channel.state]:
@@ -677,7 +676,6 @@ async def set_filter(message: Message, state: FSMContext):
 async def post_vacancy_start(cb: CallbackQuery):
     await cb.answer()
     
-    # АНТИ-СПАМ: проверяем, нет ли уже оплаченной вакансии
     try:
         p = await get_pool()
         async with p.acquire() as c:
@@ -725,11 +723,9 @@ async def on_paid(message: Message, state: FSMContext):
     payload = message.successful_payment.invoice_payload
     amount = message.successful_payment.total_amount
     
-    # АНТИ-ФРОД: проверка суммы
     if payload == "premium_30" and amount != 250: return
     if payload == "vacancy_post" and amount != 1500: return
     
-    # 1. Оплата Премиума
     if payload == "premium_30":
         try:
             await add_premium_days(message.from_user.id, 30)
@@ -746,7 +742,6 @@ async def on_paid(message: Message, state: FSMContext):
             log.error(f"Ошибка при обработке оплаты: {e}")
             await bot.send_message(ADMIN_ID, f"⚠️ <b>ОШИБКА ОПЛАТЫ!</b>\nID: <code>{message.from_user.id}</code>\nВыдай вручную: <code>/give {message.from_user.id} 30</code>")
 
-    # 2. Оплата за вакансию (B2B)
     elif payload == "vacancy_post":
         try:
             p = await get_pool()
@@ -841,7 +836,6 @@ async def approve_vacancy(cb: CallbackQuery):
         await safe_edit(cb.message, f"❌ Ошибка базы при доставании текста: {e}")
         return
     
-    # 1. Постим в канал
     try:
         post = await bot.send_message(CHANNEL_ID, f"📢 <b>Новая вакансия!</b>\n\n{text_to_post}", disable_web_page_preview=True)
         post_url = post.link
@@ -849,13 +843,11 @@ async def approve_vacancy(cb: CallbackQuery):
         await safe_edit(cb.message, f"❌ Ошибка постинга в канал: {e}")
         return
         
-    # 2. Удаляем из pending сразу после постинга
     try:
         async with p.acquire() as c:
             await c.execute("DELETE FROM pending_vacancies WHERE user_id = $1", uid)
     except Exception: pass
 
-    # 3. Рассылаем Премиумам
     try:
         async with p.acquire() as c:
             users = await c.fetch("SELECT user_id FROM users WHERE premium_until > NOW()")
