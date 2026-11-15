@@ -202,7 +202,6 @@ async def apply_referral(ref_id: int, new_uid: int) -> bool:
 
 # ---------- ИИ Адаптер ----------
 async def generate_adapted_cv(cv_text: str, vacancy_text: str) -> str:
-    # Очищаем ключ от случайных пробелов, если они есть
     key = GROQ_API_KEY.strip() if GROQ_API_KEY else ""
     if not key:
         return "⚠️ Ошибка: API ключ нейросети не настроен в Render."
@@ -220,7 +219,7 @@ async def generate_adapted_cv(cv_text: str, vacancy_text: str) -> str:
 {cv_text}
 """
     data = {
-        "model": "llama3-70b-8192", # Самая стабильная модель на Groq
+        "model": "llama-3.1-8b-instant",
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.5
     }
