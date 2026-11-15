@@ -202,12 +202,14 @@ async def apply_referral(ref_id: int, new_uid: int) -> bool:
 
 # ---------- ИИ Адаптер ----------
 async def generate_adapted_cv(cv_text: str, vacancy_text: str) -> str:
-    if not GROQ_API_KEY:
+    # Очищаем ключ от случайных пробелов, если они есть
+    key = GROQ_API_KEY.strip() if GROQ_API_KEY else ""
+    if not key:
         return "⚠️ Ошибка: API ключ нейросети не настроен в Render."
 
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Authorization": f"Bearer {key}",
         "Content-Type": "application/json"
     }
     prompt = f"""Ты HR. Перепиши резюме под вакансию. Выдели ключевые навыки, добавь нужные слова. Ответь ТОЛЬКО текстом резюме без лишних вступлений.
@@ -218,7 +220,7 @@ async def generate_adapted_cv(cv_text: str, vacancy_text: str) -> str:
 {cv_text}
 """
     data = {
-        "model": "llama-3.3-70b-versatile", # ОБНОВЛЕНО НА АКТУАЛЬНУЮ МОДЕЛЬ
+        "model": "llama3-70b-8192", # Самая стабильная модель на Groq
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.5
     }
