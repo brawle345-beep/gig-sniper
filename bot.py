@@ -218,7 +218,7 @@ async def generate_adapted_cv(cv_text: str, vacancy_text: str) -> str:
 {cv_text}
 """
     data = {
-        "model": "llama-3.3-70b-versatile",
+        "model": "llama-3.3-70b-versatile", # ОБНОВЛЕНО НА АКТУАЛЬНУЮ МОДЕЛЬ
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.5
     }
