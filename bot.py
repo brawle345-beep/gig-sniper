@@ -42,6 +42,7 @@ IS_MAINTENANCE = False
 class AdminStates(StatesGroup):
     give_id = State()
     give_days = State()
+    give_trial_id = State()
     add_channel = State()
     del_channel = State()
 
@@ -64,57 +65,66 @@ async def get_pool() -> asyncpg.Pool:
 
 async def init_db():
     global IS_MAINTENANCE
-    p = await get_pool()
-    async with p.acquire() as c:
-        await c.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                user_id BIGINT PRIMARY KEY,
-                premium_until TIMESTAMP WITH TIME ZONE,
-                is_paid BOOLEAN DEFAULT FALSE,
-                filter_word VARCHAR(255) DEFAULT NULL
-            );
-            ALTER TABLE users ADD COLUMN IF NOT EXISTS is_paid BOOLEAN DEFAULT FALSE;
-            ALTER TABLE users ADD COLUMN IF NOT EXISTS filter_word VARCHAR(255) DEFAULT NULL;
-            
-            CREATE TABLE IF NOT EXISTS referrals (
-                referrer BIGINT NOT NULL,
-                referred BIGINT NOT NULL,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                PRIMARY KEY (referrer, referred),
-                UNIQUE (referred)
-            );
-            ALTER TABLE referrals ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();
-            
-            CREATE TABLE IF NOT EXISTS channels (
-                name VARCHAR(255) PRIMARY KEY
-            );
-            
-            CREATE TABLE IF NOT EXISTS settings (
-                key VARCHAR(50) PRIMARY KEY,
-                value VARCHAR(50)
-            );
-            
-            CREATE TABLE IF NOT EXISTS pending_vacancies (
-                user_id BIGINT PRIMARY KEY,
-                paid_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                text TEXT DEFAULT NULL
-            );
-            ALTER TABLE pending_vacancies ADD COLUMN IF NOT EXISTS text TEXT DEFAULT NULL;
-        """)
-        
-        count = await c.fetchval("SELECT COUNT(*) FROM channels")
-        if count == 0:
-            await c.execute("""
-                INSERT INTO channels (name) VALUES 
-                ('it_vakansii_jobs'), ('remote_it_jobs'), ('python_jobs')
-            """)
-            
-        maint_val = await c.fetchval("SELECT value FROM settings WHERE key = 'maintenance'")
-        if maint_val is None:
-            await c.execute("INSERT INTO settings (key, value) VALUES ('maintenance', '0')")
-            IS_MAINTENANCE = False
-        else:
-            IS_MAINTENANCE = (maint_val == '1')
+    # Защита от падения при старте, если база спит
+    for attempt in range(5):
+        try:
+            p = await get_pool()
+            async with p.acquire() as c:
+                await c.execute("""
+                    CREATE TABLE IF NOT EXISTS users (
+                        user_id BIGINT PRIMARY KEY,
+                        premium_until TIMESTAMP WITH TIME ZONE,
+                        is_paid BOOLEAN DEFAULT FALSE,
+                        filter_word VARCHAR(255) DEFAULT NULL
+                    );
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS is_paid BOOLEAN DEFAULT FALSE;
+                    ALTER TABLE users ADD COLUMN IF NOT EXISTS filter_word VARCHAR(255) DEFAULT NULL;
+                    
+                    CREATE TABLE IF NOT EXISTS referrals (
+                        referrer BIGINT NOT NULL,
+                        referred BIGINT NOT NULL,
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                        PRIMARY KEY (referrer, referred),
+                        UNIQUE (referred)
+                    );
+                    ALTER TABLE referrals ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();
+                    
+                    CREATE TABLE IF NOT EXISTS channels (
+                        name VARCHAR(255) PRIMARY KEY
+                    );
+                    
+                    CREATE TABLE IF NOT EXISTS settings (
+                        key VARCHAR(50) PRIMARY KEY,
+                        value VARCHAR(50)
+                    );
+                    
+                    CREATE TABLE IF NOT EXISTS pending_vacancies (
+                        user_id BIGINT PRIMARY KEY,
+                        paid_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                        text TEXT DEFAULT NULL
+                    );
+                    ALTER TABLE pending_vacancies ADD COLUMN IF NOT EXISTS text TEXT DEFAULT NULL;
+                """)
+                
+                count = await c.fetchval("SELECT COUNT(*) FROM channels")
+                if count == 0:
+                    await c.execute("""
+                        INSERT INTO channels (name) VALUES 
+                        ('it_vakansii_jobs'), ('remote_it_jobs'), ('python_jobs')
+                    """)
+                    
+                maint_val = await c.fetchval("SELECT value FROM settings WHERE key = 'maintenance'")
+                if maint_val is None:
+                    await c.execute("INSERT INTO settings (key, value) VALUES ('maintenance', '0')")
+                    IS_MAINTENANCE = False
+                else:
+                    IS_MAINTENANCE = (maint_val == '1')
+            break # Если всё ок, выходим из цикла
+        except Exception as e:
+            log.error(f"DB init attempt {attempt+1} failed: {e}")
+            await asyncio.sleep(3)
+    else:
+        log.error("Could not initialize DB after 5 attempts.")
 
 async def get_channels() -> list:
     try:
@@ -134,6 +144,24 @@ async def get_premium_until(user_id: int):
         return row["premium_until"] if row else None
     except Exception:
         return None
+
+async def is_user_paid(user_id: int) -> bool:
+    try:
+        p = await get_pool()
+        async with p.acquire() as c:
+            row = await c.fetchrow("SELECT is_paid FROM users WHERE user_id = $1", user_id)
+        return bool(row and row["is_paid"])
+    except Exception:
+        return False
+
+async def check_user_exists(user_id: int) -> bool:
+    try:
+        p = await get_pool()
+        async with p.acquire() as c:
+            row = await c.fetchval("SELECT 1 FROM users WHERE user_id = $1", user_id)
+        return row is not None
+    except Exception:
+        return False
 
 async def get_user_filter(user_id: int):
     try:
@@ -405,7 +433,8 @@ def get_sub_menu():
 def get_admin_menu():
     maint_btn = "🟢 Тех. работы: ВЫКЛ" if IS_MAINTENANCE else "🔴 Тех. работы: ВКЛ"
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💎 Выдать Премиум", callback_data="admin_give"), InlineKeyboardButton(text="🧹 Очистить фейки", callback_data="admin_clear")],
+        [InlineKeyboardButton(text="💎 Выдать Премиум", callback_data="admin_give"), InlineKeyboardButton(text="🎁 Триал (ID)", callback_data="admin_give_trial")],
+        [InlineKeyboardButton(text="🎁 Триал ВСЕМ (3 дня)", callback_data="admin_give_all_trials")],
         [InlineKeyboardButton(text="➕ Добавить канал", callback_data="admin_add_ch"), InlineKeyboardButton(text="🗑 Удалить канал", callback_data="admin_del_ch")],
         [InlineKeyboardButton(text=maint_btn, callback_data="admin_toggle_maint")],
         [InlineKeyboardButton(text="🏠 В меню", callback_data="main_menu")]
@@ -432,7 +461,7 @@ async def render_admin_panel(cb: CallbackQuery, state: FSMContext | None = None)
         text = (
             f"🛠 <b>Пульт управления</b>\n━━━━━━━━━━━━━━━━━━\n\n"
             f"👥 Юзеров: <b>{total}</b>\n💎 Купили: <b>{len(premium_users)}</b>\n"
-            f"🎁 Триал: <b>{trial_users}</b>\n💰 Доход: <b>{len(premium_users) * 250} ⭐</b>\n"
+            f"🎁 Активных триалов: <b>{trial_users}</b>\n💰 Доход: <b>{len(premium_users) * 250} ⭐</b>\n"
             f"🛠 Тех. работы: <b>{'🔴 ВКЛ' if IS_MAINTENANCE else '🟢 ВЫКЛ'}</b>\n\n"
             f"📡 <b>Каналы:</b>\n<code>{ch_list}</code>"
         )
@@ -518,12 +547,22 @@ async def start(message: Message, state: FSMContext):
         await message.answer("👋 <b>Привет!</b>\n\nПодпишись на канал.", reply_markup=get_sub_menu())
         return
 
-    until = await get_premium_until(uid)
-    if until is None:
+    # АВТО-ТРИАЛ: ТОЛЬКО ДЛЯ НОВЫХ ЮЗЕРОВ
+    user_exists = await check_user_exists(uid)
+    paid_status = await is_user_paid(uid)
+    
+    if not user_exists:
         await add_premium_days(uid, 3)
         if not is_admin:
-            try: await bot.send_message(ADMIN_ID, f"👤 <b>Новый юзер</b>\n{escape(user_name)}\nID: <code>{uid}</code>\n🎁 Триал 3 дня.")
+            try: await bot.send_message(ADMIN_ID, f"👤 <b>Новый юзер (авто-триал)</b>\n{escape(user_name)}\nID: <code>{uid}</code>")
             except: pass
+    elif not paid_status:
+        # Если юзер есть, но не платил, мы НЕ даем ему триал, если он просто нажал /start
+        # (Иначе он будет спамить /start и получать бесконечные дни)
+        until = await get_premium_until(uid)
+        if until is None or until.timestamp() < time.time():
+            await message.answer("⚠️ Твой пробный период закончился. Для доступа ко всем вакансиям оформи Премиум.", reply_markup=await build_main_menu(uid, is_admin))
+            return
             
     parts = message.text.split()
     if len(parts) > 1 and parts[1].startswith("ref_"):
@@ -532,7 +571,7 @@ async def start(message: Message, state: FSMContext):
             try: await bot.send_message(int(raw), f"🎁 По твоей ссылке перешёл {escape(user_name)}! +7 дней.")
             except: pass
             
-    await message.answer(f"👋 <b>Привет, {escape(user_name)}!</b>\n\n🚀 <b>Gig Sniper</b> — радар IT-заказов.\n\n🎁 Тебе активирован <b>3-дневный Премиум</b>.", reply_markup=await build_main_menu(uid, is_admin))
+    await message.answer(f"👋 <b>Привет, {escape(user_name)}!</b>\n\n🚀 <b>Gig Sniper</b> — радар IT-заказов.\n\n🎁 Твой доступ активирован.", reply_markup=await build_main_menu(uid, is_admin))
 
 @dp.callback_query(F.data == "check_sub")
 async def cb_check_sub(cb: CallbackQuery):
@@ -773,7 +812,7 @@ async def admin_give_start(cb: CallbackQuery, state: FSMContext):
     if str(cb.from_user.id) != ADMIN_ID: return
     await cb.answer()
     await state.set_state(AdminStates.give_id)
-    await safe_edit(cb.message, "💎 <b>Выдача</b>\nОтправь ID:", get_cancel_menu())
+    await safe_edit(cb.message, "💎 <b>Выдача Премиума</b>\nОтправь ID юзера:", get_cancel_menu())
 
 @dp.message(AdminStates.give_id)
 async def admin_give_days_input(message: Message, state: FSMContext):
@@ -794,15 +833,42 @@ async def admin_give_days_finish(message: Message, state: FSMContext):
     except: await message.answer("❌ Ошибка.")
     await state.clear()
 
-@dp.callback_query(F.data == "admin_clear")
-async def admin_clear_fakes(cb: CallbackQuery, state: FSMContext):
+# КНОПКА: ВЫДАТЬ ТРИАЛ ПО ID
+@dp.callback_query(F.data == "admin_give_trial")
+async def admin_give_trial_start(cb: CallbackQuery, state: FSMContext):
     if str(cb.from_user.id) != ADMIN_ID: return
-    await cb.answer("🧹 Сброшено!", show_alert=True)
+    await cb.answer()
+    await state.set_state(AdminStates.give_trial_id)
+    await safe_edit(cb.message, "🎁 <b>Выдача Триала</b>\nОтправь ID юзера (выдаст 3 дня):", get_cancel_menu())
+
+@dp.message(AdminStates.give_trial_id)
+async def admin_give_trial_finish(message: Message, state: FSMContext):
+    if str(message.from_user.id) != ADMIN_ID or not message.text or not message.text.isdigit(): return
+    uid = int(message.text)
+    try:
+        await add_premium_days(uid, 3)
+        await message.answer(f"✅ Триал (3 дня) успешно выдан <code>{uid}</code>.", reply_markup=get_admin_menu())
+    except Exception as e: await message.answer(f"❌ Ошибка: {e}", reply_markup=get_admin_menu())
+    await state.clear()
+
+# НОВАЯ КНОПКА: ВЫДАТЬ ТРИАЛ ВООБЩЕ ВСЕМ
+@dp.callback_query(F.data == "admin_give_all_trials")
+async def admin_give_all_trials(cb: CallbackQuery):
+    if str(cb.from_user.id) != ADMIN_ID: return
+    await cb.answer("Выдаю триалы всем...", show_alert=True)
     try:
         p = await get_pool()
-        async with p.acquire() as c: await c.execute("UPDATE users SET premium_until = NOW(), filter_word = NULL WHERE is_paid = FALSE")
-    except: pass
-    await render_admin_panel(cb, state)
+        async with p.acquire() as c:
+            # Даем 3 дня ВСЕМ, кто не оплачивал
+            await c.execute("""
+                UPDATE users 
+                SET premium_until = GREATEST(COALESCE(premium_until, NOW()), NOW()) + interval '3 days'
+                WHERE is_paid = FALSE
+            """)
+        await render_admin_panel(cb)
+        await bot.send_message(cb.from_user.id, "✅ <b>Всем неоплаченным юзерам выдан триал на 3 дня!</b>")
+    except Exception as e:
+        await bot.send_message(cb.from_user.id, f"❌ Ошибка: {e}")
 
 @dp.callback_query(F.data == "admin_add_ch")
 async def admin_add_ch_start(cb: CallbackQuery, state: FSMContext):
@@ -851,13 +917,21 @@ async def cancel_handler(message: Message, state: FSMContext):
     curr = await state.get_state()
     if not curr: return
     await state.clear()
+    
     if curr == UserStates.waiting_for_vacancy.state:
         try:
             p = await get_pool()
             async with p.acquire() as c: await c.execute("DELETE FROM pending_vacancies WHERE user_id = $1", message.from_user.id)
         except: pass
-        return await message.answer("❌ Отменено.", reply_markup=await build_main_menu(message.from_user.id, str(message.from_user.id) == ADMIN_ID))
-    await message.answer("❌ Отменено.", reply_markup=get_admin_menu() if "Admin" in curr else await build_main_menu(message.from_user.id, str(message.from_user.id) == ADMIN_ID))
+        kb = await build_main_menu(message.from_user.id, str(message.from_user.id) == ADMIN_ID)
+        return await message.answer("❌ Отменено.", reply_markup=kb)
+        
+    if "Admin" in curr:
+        kb = get_admin_menu()
+    else:
+        kb = await build_main_menu(message.from_user.id, str(message.from_user.id) == ADMIN_ID)
+        
+    await message.answer("❌ Отменено.", reply_markup=kb)
 
 # ---------- Запуск ----------
 async def main():
