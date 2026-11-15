@@ -203,14 +203,14 @@ async def apply_referral(ref_id: int, new_uid: int) -> bool:
 # ---------- ИИ Адаптер ----------
 async def generate_adapted_cv(cv_text: str, vacancy_text: str) -> str:
     if not GROQ_API_KEY:
-        return "⚠️ Ошибка: API ключ нейросети не настроен."
+        return "⚠️ Ошибка: API ключ нейросети не настроен в Render."
 
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json"
     }
-    prompt = f"""Ты HR. Перепиши резюме под вакансию. Выдели ключевые навыки, добавь нужные слова. Ответь ТОЛЬКО текстом резюме (используй Markdown для форматирования).
+    prompt = f"""Ты HR. Перепиши резюме под вакансию. Выдели ключевые навыки, добавь нужные слова. Ответь ТОЛЬКО текстом резюме без лишних вступлений.
 ВАКАНСИЯ:
 {vacancy_text}
 
@@ -218,7 +218,7 @@ async def generate_adapted_cv(cv_text: str, vacancy_text: str) -> str:
 {cv_text}
 """
     data = {
-        "model": "llama3-70b-8192",
+        "model": "llama-3.3-70b-versatile",
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.5
     }
@@ -229,8 +229,12 @@ async def generate_adapted_cv(cv_text: str, vacancy_text: str) -> str:
                 if resp.status == 200:
                     result = await resp.json()
                     return result['choices'][0]['message']['content']
-                return "⚠️ Ошибка нейросети. Попробуйте позже."
-        except Exception:
+                else:
+                    error_text = await resp.text()
+                    log.error(f"Groq API Error {resp.status}: {error_text}")
+                    return f"⚠️ Ошибка API (Код {resp.status}). Проверь логи."
+        except Exception as e:
+            log.error(f"Groq connection error: {e}")
             return "⚠️ Таймаут соединения с нейросетью."
 
 # ---------- Парсер ----------
@@ -622,12 +626,12 @@ async def get_vacancy_text(message: Message, state: FSMContext):
     await state.clear()
     await status_msg.delete()
     
-    # Экранируем на случай, если ИИ выдал скобки, но оставляем Markdown для красоты
-    try:
-        await message.answer(f"✅ <b>Готовое резюме:</b>\n\n{adapted}", parse_mode=ParseMode.MARKDOWN, reply_markup=await build_main_menu(message.from_user.id, str(message.from_user.id) == ADMIN_ID))
-    except TelegramBadRequest:
-        # Если ИИ сломал Markdown, отправляем чистым текстом
-        await message.answer(f"✅ <b>Готовое резюме:</b>\n\n{escape(adapted)}", parse_mode=ParseMode.HTML, reply_markup=await build_main_menu(message.from_user.id, str(message.from_user.id) == ADMIN_ID))
+    safe_adapted = escape(adapted)
+    
+    await message.answer(
+        f"✅ <b>Готовое резюме:</b>\n\n<code>{safe_adapted}</code>", 
+        reply_markup=await build_main_menu(message.from_user.id, str(message.from_user.id) == ADMIN_ID)
+    )
 
 # ---------- B2B и Оплата ----------
 @dp.callback_query(F.data == "post_vacancy")
