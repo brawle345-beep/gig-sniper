@@ -33,15 +33,16 @@ TOKEN = os.environ.get("BOT_TOKEN")
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 ADMIN_ID = "7183342708"
-CHANNEL_ID = "@gigsnipervakansii"
-CHANNEL_URL = "https://t.me/gigsnipervakansii"
+CHANNEL_ID = "@gigsniper_channel"
+CHANNEL_URL = "https://t.me/gigsniper_channel"
 
 IS_MAINTENANCE = False
-FREE_DELAY = 900  # 15 минут
+FREE_DELAY = 900  # 15 минут задержки для бесплатных
 
 class AdminStates(StatesGroup):
     give_id = State()
     give_days = State()
+    give_trial_id = State()
     add_channel = State()
     del_channel = State()
 
@@ -97,7 +98,7 @@ async def init_db():
             );
             ALTER TABLE pending_vacancies ADD COLUMN IF NOT EXISTS text TEXT DEFAULT NULL;
 
-            -- ТАБЛИЦА ДЛЯ ОТЛОЖЕННЫХ ПУШЕЙ
+            -- ТАБЛИЦА ДЛЯ ОТЛОЖЕННЫХ ПУШЕЙ (FOMO)
             CREATE TABLE IF NOT EXISTS delayed_pushes (
                 id SERIAL PRIMARY KEY,
                 text TEXT NOT NULL,
@@ -162,7 +163,7 @@ async def check_sub(user_id: int) -> bool:
     try:
         member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
         return member.status in ["member", "administrator", "creator"]
-    except: return False
+    except: return True 
 
 async def apply_referral(ref_id: int, new_uid: int) -> bool:
     if ref_id == new_uid: return False
@@ -244,7 +245,7 @@ async def fetch_feed() -> list:
         _feed["ts"] = now
         return jobs
 
-# ---------- БЕЗОПАСНАЯ РАССЫЛКА (FloodWait + Мертвые души) ----------
+# ---------- БЕЗОПАСНАЯ РАССЫЛКА ----------
 async def safe_broadcast(user_ids: list, text: str, markup=None):
     success = 0
     p = await get_pool()
@@ -262,7 +263,6 @@ async def safe_broadcast(user_ids: list, text: str, markup=None):
                 success += 1
             except: pass
         except TelegramForbiddenError:
-            # Юзер заблокировал бота — помечаем мертвым
             try:
                 async with p.acquire() as c:
                     await c.execute("UPDATE users SET is_active = FALSE WHERE user_id = $1", uid)
@@ -272,12 +272,10 @@ async def safe_broadcast(user_ids: list, text: str, markup=None):
     return success
 
 async def delayed_push_worker():
-    """Воркер для выдачи FOMO-пушей (защита от дублей)"""
     while True:
         try:
             p = await get_pool()
             async with p.acquire() as c:
-                # Забираем и СРАЗУ удаляем, чтобы не задублировать при рестарте
                 rows = await c.fetch("DELETE FROM delayed_pushes WHERE send_at <= NOW() RETURNING text")
             
             if rows:
@@ -335,7 +333,6 @@ async def autopush_worker():
                         
                         await safe_broadcast([u['user_id'] for u in prem_users], prem_text, kb_prem)
                         
-                        # Кладем в БД отложенный пуш для бесплатных
                         async with p.acquire() as c:
                             await c.execute(
                                 "INSERT INTO delayed_pushes (text, send_at) VALUES ($1, NOW() + interval '15 minutes')",
@@ -424,7 +421,9 @@ def get_sub_menu():
 def get_admin_menu():
     maint_btn = "🟢 Тех. работы: ВЫКЛ" if IS_MAINTENANCE else "🔴 Тех. работы: ВКЛ"
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💎 Выдать Премиум", callback_data="admin_give"), InlineKeyboardButton(text="🧹 Очистить фейки", callback_data="admin_clear")],
+        [InlineKeyboardButton(text="💎 Выдать Премиум", callback_data="admin_give"), InlineKeyboardButton(text="🎁 Триал (ID)", callback_data="admin_give_trial")],
+        [InlineKeyboardButton(text="🎁 Триал ВСЕМ (3 дня)", callback_data="admin_give_all_trials")],
+        [InlineKeyboardButton(text="🧹 Очистить просроченные", callback_data="admin_clear")],
         [InlineKeyboardButton(text="➕ Добавить канал", callback_data="admin_add_ch"), InlineKeyboardButton(text="🗑 Удалить канал", callback_data="admin_del_ch")],
         [InlineKeyboardButton(text=maint_btn, callback_data="admin_toggle_maint")],
         [InlineKeyboardButton(text="🏠 В меню", callback_data="main_menu")]
@@ -549,7 +548,7 @@ async def cancel_handler(message: Message, state: FSMContext):
         
     await state.clear()
     
-    if current_state in [AdminStates.give_id.state, AdminStates.give_days.state, AdminStates.add_channel.state, AdminStates.del_channel.state]:
+    if current_state in [AdminStates.give_id.state, AdminStates.give_days.state, AdminStates.give_trial_id.state, AdminStates.add_channel.state, AdminStates.del_channel.state]:
         await message.answer("❌ Отменено.", reply_markup=get_admin_menu())
     else:
         await message.answer("❌ Отменено.", reply_markup=await build_main_menu(message.from_user.id, str(message.from_user.id) == ADMIN_ID))
@@ -704,7 +703,6 @@ async def post_vacancy_start(cb: CallbackQuery):
 @dp.callback_query(F.data == "pay_for_vacancy")
 async def pay_for_vacancy(cb: CallbackQuery):
     await cb.answer()
-    # Проверка на дубль перед выставлением счета
     try:
         p = await get_pool()
         async with p.acquire() as c:
@@ -938,14 +936,49 @@ async def admin_give_days_finish(message: Message, state: FSMContext):
         await message.answer(f"❌ Ошибка БД: {e}", reply_markup=get_admin_menu())
     await state.clear()
 
+@dp.callback_query(F.data == "admin_give_trial")
+async def admin_give_trial_start(cb: CallbackQuery, state: FSMContext):
+    if str(cb.from_user.id) != ADMIN_ID: return
+    await cb.answer()
+    await state.set_state(AdminStates.give_trial_id)
+    await safe_edit(cb.message, "🎁 <b>Выдача Триала</b>\n\nОтправь <b>ID пользователя</b> (выдаст 3 дня).\n/cancel для отмены.", get_cancel_menu())
+
+@dp.message(AdminStates.give_trial_id)
+async def admin_give_trial_finish(message: Message, state: FSMContext):
+    if str(message.from_user.id) != ADMIN_ID or not message.text or not message.text.isdigit(): return
+    uid = int(message.text)
+    try:
+        await add_premium_days(uid, 3)
+        await message.answer(f"✅ Триал (3 дня) успешно выдан <code>{uid}</code>.", reply_markup=get_admin_menu())
+    except Exception as e: await message.answer(f"❌ Ошибка: {e}", reply_markup=get_admin_menu())
+    await state.clear()
+
+@dp.callback_query(F.data == "admin_give_all_trials")
+async def admin_give_all_trials(cb: CallbackQuery):
+    if str(cb.from_user.id) != ADMIN_ID: return
+    await cb.answer("Выдаю триалы всем...", show_alert=True)
+    try:
+        p = await get_pool()
+        async with p.acquire() as c:
+            await c.execute("""
+                UPDATE users 
+                SET premium_until = GREATEST(COALESCE(premium_until, NOW()), NOW()) + interval '3 days'
+                WHERE is_paid = FALSE
+            """)
+        await render_admin_panel(cb)
+        await bot.send_message(cb.from_user.id, "✅ <b>Всем неоплаченным юзерам выдан триал на 3 дня!</b>")
+    except Exception as e:
+        await bot.send_message(cb.from_user.id, f"❌ Ошибка: {e}")
+
 @dp.callback_query(F.data == "admin_clear")
 async def admin_clear_fakes(cb: CallbackQuery, state: FSMContext):
     if str(cb.from_user.id) != ADMIN_ID: return
-    await cb.answer("🧹 Неоплаченные сброшены!", show_alert=True)
+    await cb.answer("🧹 Очищены только ПРОСРОЧЕННЫЕ триалы!", show_alert=True)
     try:
         p = await get_pool()
         async with p.acquire() as c: 
-            await c.execute("UPDATE users SET premium_until = NOW(), filter_word = NULL WHERE is_paid = FALSE")
+            # Удаляем только если уже истекло и не платил
+            await c.execute("UPDATE users SET premium_until = NULL, filter_word = NULL WHERE is_paid = FALSE AND premium_until < NOW()")
     except: pass
     await render_admin_panel(cb, state)
 
